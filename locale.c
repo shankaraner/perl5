@@ -2425,7 +2425,7 @@ Perl__mem_collxfrm(pTHX_ const char *input_string,
         } /* End of determining the character that is to replace NULs */
 
         /* If the replacement is variant under UTF-8, it must match the
-         * UTF8-ness as the original */
+         * UTF8-ness of the original */
         if ( ! UVCHR_IS_INVARIANT(PL_strxfrm_NUL_replacement) && utf8) {
             this_replacement_char[0] =
                                 UTF8_EIGHT_BIT_HI(PL_strxfrm_NUL_replacement);
