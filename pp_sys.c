@@ -2121,7 +2121,7 @@ PP(pp_syswrite)
 	goto say_undef;
     SP = ORIGMARK;
     if (doing_utf8)
-        retval = utf8_length((U8*)buffer, (U8*)buffer + retval);
+        retval = valid_utf8_length((U8*)buffer, (U8*)buffer + retval);
 
     Safefree(tmpbuf);
 #if Size_t_size > IVSIZE
