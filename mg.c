@@ -737,7 +737,7 @@ Perl_magic_regdatum_get(pTHX_ SV *sv, MAGIC *mg)
 			const char * const b = RX_SUBBEG(rx);
 			if (b)
 			    i = RX_SUBCOFFSET(rx) +
-                                    utf8_length((U8*)b,
+                                    valid_utf8_length((U8*)b,
                                         (U8*)(b-RX_SUBOFFSET(rx)+i));
 		    }
 
