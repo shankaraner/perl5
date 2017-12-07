@@ -5685,7 +5685,7 @@ PP(pp_split)
     const char *m;
     SSize_t iters = 0;
     const STRLEN slen = do_utf8
-                        ? utf8_length((U8*)s, (U8*)strend)
+                        ? valid_utf8_length((U8*)s, (U8*)strend)
                         : (STRLEN)(strend - s);
     SSize_t maxiters = slen + 10;
     I32 trailing_empty = 0;
