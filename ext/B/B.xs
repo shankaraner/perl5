@@ -1265,7 +1265,7 @@ aux_list(o, cv)
                             chars = bytes;
                         else {
                             /* return char lengths rather than byte lengths */
-                            chars = utf8_length(p, p + bytes);
+                            chars = valid_utf8_length(p, p + bytes);
                             p += bytes;
                         }
                         lens++;
