@@ -68,7 +68,7 @@ struct magic {
     SvPOK(sv) && (!SvGMAGICAL(sv) || sv_only_taint_gmagic(sv))  \
 	? (mg)->mg_len = (off), (mg)->mg_flags |= MGf_BYTES \
 	: ((mg)->mg_len = DO_UTF8(sv)			     \
-	    ? (SSize_t)utf8_length((U8 *)(pv), (U8 *)(pv)+(off)) \
+	    ? (SSize_t)valid_utf8_length((U8 *)(pv), (U8 *)(pv)+(off)) \
 	    : (SSize_t)(off),					  \
 	   (mg)->mg_flags &= ~MGf_BYTES))
 #endif
