@@ -947,8 +947,8 @@ S_unpack_rec(pTHX_ tempsym_t* symptr, const char *s, const char *strbeg, const c
 		from = group ? strbeg + group->strbeg : strbeg;
 	    }
 	    sv = from <= s ?
-		newSVuv(  u8 ? (UV) utf8_length((const U8*)from, (const U8*)s) : (UV) (s-from)) :
-		newSViv(-(u8 ? (IV) utf8_length((const U8*)s, (const U8*)from) : (IV) (from-s)));
+		newSVuv(  u8 ? (UV) valid_utf8_length((const U8*)from, (const U8*)s) : (UV) (s-from)) :
+		newSViv(-(u8 ? (IV) valid_utf8_length((const U8*)s, (const U8*)from) : (IV) (from-s)));
 	    mXPUSHs(sv);
 	    break;
 	}
@@ -1013,7 +1013,7 @@ S_unpack_rec(pTHX_ tempsym_t* symptr, const char *s, const char *strbeg, const c
             SSize_t ai32;
  	    if (!len)			/* Avoid division by 0 */
  		len = 1;
-	    if (utf8) ai32 = utf8_length((U8 *) strbeg, (U8 *) s) % len;
+	    if (utf8) ai32 = valid_utf8_length((U8 *) strbeg, (U8 *) s) % len;
 	    else      ai32 = (s - strbeg)                         % len;
 	    if (ai32 == 0) break;
 	    len -= ai32;
@@ -2303,7 +2303,7 @@ S_pack_rec(pTHX_ SV *cat, tempsym_t* symptr, SV **beglist, SV **endlist )
 	    SSize_t ai32;
 	    if (!len)			/* Avoid division by 0 */
 		len = 1;
-	    if (utf8) ai32 = utf8_length((U8 *) start, (U8 *) cur) % len;
+	    if (utf8) ai32 = valid_utf8_length((U8 *) start, (U8 *) cur) % len;
 	    else      ai32 = (cur - start) % len;
 	    if (ai32 == 0) goto no_change;
 	    len -= ai32;
