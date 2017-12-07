@@ -4003,7 +4003,7 @@ S_join_exact(pTHX_ RExC_state_t *pRExC_state, regnode *scan,
                      * /aa, no folds which contain ASCII code points are
                      * allowed, so check for those, and skip if found. */
                     if (OP(scan) != EXACTFA && OP(scan) != EXACTFA_NO_TRIE) {
-                        count = utf8_length(s, multi_end);
+                        count = valid_utf8_length(s, multi_end);
                         s = multi_end;
                     }
                     else {
@@ -4030,7 +4030,7 @@ S_join_exact(pTHX_ RExC_state_t *pRExC_state, regnode *scan,
              * nodes.  Therefore we need to be sure it doesn't go below zero,
              * as the real string could be shorter */
             if (OP(scan) == EXACTFL) {
-                int total_chars = utf8_length((U8*) STRING(scan),
+                int total_chars = valid_utf8_length((U8*) STRING(scan),
                                            (U8*) STRING(scan) + STR_LEN(scan));
                 if (total_count_delta > total_chars) {
                     total_count_delta = total_chars;
@@ -4901,7 +4901,7 @@ S_study_chunk(pTHX_ RExC_state_t *pRExC_state, regnode **scanp,
 	    if (UTF) {
 		const U8 * const s = (U8*)STRING(scan);
 		uc = utf8_to_uvchr_buf(s, s + l, NULL);
-		l = utf8_length(s, s + l);
+		l = valid_utf8_length(s, s + l);
 	    } else {
 		uc = *((U8*)STRING(scan));
 	    }
@@ -4922,7 +4922,7 @@ S_study_chunk(pTHX_ RExC_state_t *pRExC_state, regnode **scanp,
 		    MAGIC * const mg = SvUTF8(sv) && SvMAGICAL(sv) ?
 			mg_find(sv, PERL_MAGIC_utf8) : NULL;
 		    if (mg && mg->mg_len >= 0)
-			mg->mg_len += utf8_length((U8*)STRING(scan),
+			mg->mg_len += valid_utf8_length((U8*)STRING(scan),
                                               (U8*)STRING(scan)+STR_LEN(scan));
 		}
 		data->last_end = data->pos_min + l;
@@ -4957,7 +4957,7 @@ S_study_chunk(pTHX_ RExC_state_t *pRExC_state, regnode **scanp,
                 scan_commit(pRExC_state, data, minlenp, is_inf);
 	    }
 	    if (UTF) {
-		l = utf8_length(s, s + l);
+		l = valid_utf8_length(s, s + l);
 	    }
 	    if (unfolded_multi_char) {
                 RExC_seen |= REG_UNFOLDED_MULTI_SEEN;
@@ -5306,7 +5306,7 @@ S_study_chunk(pTHX_ RExC_state_t *pRExC_state, regnode **scanp,
 			l -= old;
 			/* Get the added string: */
 			last_str = newSVpvn_utf8(s  + old, l, UTF);
-                        last_chrs = UTF ? utf8_length((U8*)(s + old),
+                        last_chrs = UTF ? valid_utf8_length((U8*)(s + old),
                                             (U8*)(s + old + l)) : l;
 			if (deltanext == 0 && pos_before == b) {
 			    /* What was added is a constant string */
@@ -17037,7 +17037,7 @@ S_regclass(pTHX_ RExC_state_t *pRExC_state, I32 *flagp, U32 depth,
                      * again.  Otherwise add this character to the list of
                      * multi-char folds. */
                     if (! RExC_in_multi_char_class) {
-                        STRLEN cp_count = utf8_length(foldbuf,
+                        STRLEN cp_count = valid_utf8_length(foldbuf,
                                                       foldbuf + foldlen);
                         SV* multi_fold = sv_2mortal(newSVpvs(""));
 
