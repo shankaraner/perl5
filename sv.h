@@ -1974,9 +1974,9 @@ Like C<sv_utf8_upgrade>, but doesn't do magic on C<sv>.
 	sv_catpvn_flags(dsv, sstr, slen, (is_utf8)?SV_CATUTF8:SV_CATBYTES)
 
 #if defined(PERL_CORE) || defined(PERL_EXT)
-# define sv_or_pv_len_utf8(sv, pv, bytelen)	      \
-    (SvGAMAGIC(sv)				       \
-	? utf8_length((U8 *)(pv), (U8 *)(pv)+(bytelen))	\
+# define sv_or_pv_len_utf8(sv, pv, bytelen)	                \
+    (SvGAMAGIC(sv)				                \
+	? valid_utf8_length((U8 *)(pv), (U8 *)(pv)+(bytelen))	\
 	: sv_len_utf8(sv))
 #endif
 
