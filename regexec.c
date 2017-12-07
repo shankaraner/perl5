@@ -2142,7 +2142,7 @@ S_find_byclass(pTHX_ regexp * prog, const regnode *c, char *s,
         ln  = STR_LEN(c);	/* length to match in octets/bytes */
         pat_end = pat_string + ln;
         lnc = is_utf8_pat       /* length to match in characters */
-                ? utf8_length((U8 *) pat_string, (U8 *) pat_end)
+                ? valid_utf8_length((U8 *) pat_string, (U8 *) pat_end)
                 : ln;
 
         /* We have 'lnc' characters to match in the pattern, but because of
@@ -3029,7 +3029,7 @@ S_reg_set_capture_string(pTHX_ REGEXP * const rx,
                 prog->subcoffset = sv_pos_b2u_flags(sv, prog->subcoffset,
                                                 SV_GMAGIC|SV_CONST_RETURN);
             else
-                prog->subcoffset = utf8_length((U8*)strbeg,
+                prog->subcoffset = valid_utf8_length((U8*)strbeg,
                                     (U8*)(strbeg+prog->suboffset));
         }
     }
