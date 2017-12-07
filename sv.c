@@ -7510,7 +7510,7 @@ S_utf8_mg_pos_cache_update(pTHX_ SV *const sv, MAGIC **const mgp, const STRLEN b
 	   a pointer.  Note that we no longer cache utf8 offsets on refer-
 	   ences, but this check is still a good idea, for robustness.  */
 	const U8 *start = (const U8 *) SvPVX_const(sv);
-	const STRLEN realutf8 = utf8_length(start, start + byte);
+	const STRLEN realutf8 = valid_utf8_length(start, start + byte);
 
 	assert_uft8_cache_coherent("utf8_mg_pos_cache_update", utf8, realutf8,
 				   sv);
@@ -7610,7 +7610,7 @@ S_sv_pos_b2u_midway(pTHX_ const U8 *const s, const U8 *const target,
     PERL_ARGS_ASSERT_SV_POS_B2U_MIDWAY;
 
     if (forw < 2 * backw) {
-	return utf8_length(s, target);
+	return valid_utf8_length(s, target);
     }
 
     while (end > target) {
@@ -7684,7 +7684,7 @@ Perl_sv_pos_b2u_flags(pTHX_ SV *const sv, STRLEN const offset, U32 flags)
 			+ S_sv_pos_b2u_midway(aTHX_ s + cache[1], send,
 					      s + blen, mg->mg_len - cache[0]);
 		} else {
-		    len = cache[0] + utf8_length(s + cache[1], send);
+		    len = cache[0] + valid_utf8_length(s + cache[1], send);
 		}
 	    }
 	    else if (cache[3] < offset) {
@@ -7710,7 +7710,7 @@ Perl_sv_pos_b2u_flags(pTHX_ SV *const sv, STRLEN const offset, U32 flags)
 	}
     }
     if (!found || PL_utf8cache < 0) {
-	const STRLEN real_len = utf8_length(s, send);
+	const STRLEN real_len = valid_utf8_length(s, send);
 
 	if (found && PL_utf8cache < 0)
 	    assert_uft8_cache_coherent("sv_pos_b2u", len, real_len, sv);
