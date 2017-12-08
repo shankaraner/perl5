@@ -1032,7 +1032,7 @@ S_debug_studydata(pTHX_ const char *where, scan_data_t *data,
         );
 
         if (data->last_found) {
-            int i;
+            PERL_UINT_FAST8_T i;
             Perl_re_printf(aTHX_
                 "Last:'%s' %" IVdf ":%" IVdf "/%" IVdf,
                     SvPVX_const(data->last_found),
@@ -1368,7 +1368,7 @@ S_ssc_is_anything(const regnode_ssc *ssc)
 
     /* If e.g., both \w and \W are set, matches everything */
     if (ANYOF_POSIXL_SSC_TEST_ANY_SET(ssc)) {
-        int i;
+        PERL_UINT_FAST8_T i;
         for (i = 0; i < ANYOF_POSIXL_MAX; i += 2) {
             if (ANYOF_POSIXL_TEST(ssc, i) && ANYOF_POSIXL_TEST(ssc, i+1)) {
                 return TRUE;
@@ -1663,7 +1663,7 @@ S_ssc_and(pTHX_ const RExC_state_t *pRExC_state, regnode_ssc *ssc,
     if ((ANYOF_FLAGS(and_with) & ANYOF_INVERT)
         && ! is_ANYOF_SYNTHETIC(and_with))
     {
-        unsigned int i;
+        PERL_UINT_FAST8_T i;
 
         ssc_intersection(ssc,
                          anded_cp_list,
@@ -1816,7 +1816,7 @@ S_ssc_or(pTHX_ const RExC_state_t *pRExC_state, regnode_ssc *ssc,
     else if (ANYOF_FLAGS(or_with) & ANYOF_MATCHES_POSIXL) {
         ANYOF_POSIXL_OR((regnode_charclass_posixl*)or_with, ssc);
         if (ANYOF_POSIXL_SSC_TEST_ANY_SET(ssc)) {
-            unsigned int i;
+            PERL_UINT_FAST8_T i;
             for (i = 0; i < ANYOF_MAX; i += 2) {
                 if (ANYOF_POSIXL_TEST(ssc, i) && ANYOF_POSIXL_TEST(ssc, i + 1))
                 {
