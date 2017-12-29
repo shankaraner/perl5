@@ -725,6 +725,55 @@ S_find_span_end(char * s, const char * send, const char span_byte)
     return s;
 }
 
+STATIC U8 *
+S_find_span_end_mask(U8 * s, const U8 * send, const U8 span_byte, const U8 mask)
+{
+    /* Returns the position of the first byte in the sequence between 's' and
+     * 'send-1' inclusive that when anded with 'mask' isn't 'span_byte';
+     * returns 'send' if none found.
+     * */
+    PERL_ARGS_ASSERT_FIND_SPAN_END_MASK;
+
+    if ((STRLEN) (send - s) >= PERL_WORDSIZE
+
+                            /* This term is wordsize if subword; 0 if not */
+                          + PERL_WORDSIZE * PERL_IS_SUBWORD_ADDR(s)
+
+                            /* 'offset' */
+                          - (PTR2nat(s) & PERL_WORD_BOUNDARY_MASK))
+    {
+        const PERL_UINTMAX_T span_word = PERL_COUNT_MULTIPLIER * span_byte;
+
+        /* Process per-byte until reach word boundary.  XXX This loop could be
+         * eliminated if we knew that this platform had fast unaligned reads */
+        while (PTR2nat(s) & PERL_WORD_BOUNDARY_MASK) {
+            if (((* (U8 *) s) & mask) != span_byte) {
+                return s;
+            }
+            s++;
+        }
+
+        /* Here, we know we have at least one full word to process.  Process
+         * per-word as long as we have at least a full word left */
+        do {
+            if ((* (PERL_UINTMAX_T *) s) != span_word)  {
+                break;
+            }
+            s += PERL_WORDSIZE;
+        } while (s + PERL_WORDSIZE <= send);
+    }
+
+    /* Process per-character */
+    while (s < send) {
+        if (((* (U8 *) s) & mask) != span_byte) {
+            return s;
+        }
+        s++;
+    }
+
+    return s;
+}
+
 /*
  * pregexec and friends
  */
@@ -9204,11 +9253,10 @@ S_regrepeat(pTHX_ regexp *prog, char **startposp, const regnode *p,
                     U8 c1_masked = c1 & ~ c1_c2_bits_differing;
                     U8 c1_c2_mask = ~ c1_c2_bits_differing;
 
-                    while (   scan < loceol
-                           && (UCHARAT(scan) & c1_c2_mask) == c1_masked)
-                    {
-                        scan++;
-                    }
+                    scan = (char *) find_span_end_mask((U8 *) scan,
+                                                       (U8 *) loceol,
+                                                       c1_masked,
+                                                       c1_c2_mask);
                 }
                 else {
                     while (    scan < loceol
