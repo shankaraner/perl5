@@ -676,6 +676,55 @@ S_find_next_non_ascii(char * s, const char * send, const bool utf8_target)
 
 }
 
+STATIC char *
+S_find_span_end(char * s, const char * send, const char span_byte)
+{
+    /* Returns the position of the first byte in the sequence between 's' and
+     * 'send-1' inclusive that isn't 'span_byte'; returns 'send' if none found.
+     * */
+
+    PERL_ARGS_ASSERT_FIND_SPAN_END;
+
+    if ((STRLEN) (send - s) >= PERL_WORDSIZE
+
+                            /* This term is wordsize if subword; 0 if not */
+                          + PERL_WORDSIZE * PERL_IS_SUBWORD_ADDR(s)
+
+                            /* 'offset' */
+                          - (PTR2nat(s) & PERL_WORD_BOUNDARY_MASK))
+    {
+        const PERL_UINTMAX_T span_word = PERL_COUNT_MULTIPLIER * span_byte;
+
+        /* Process per-byte until reach word boundary.  XXX This loop could be
+         * eliminated if we knew that this platform had fast unaligned reads */
+        while (PTR2nat(s) & PERL_WORD_BOUNDARY_MASK) {
+            if (*s != span_byte) {
+                return s;
+            }
+            s++;
+        }
+
+        /* Here, we know we have at least one full word to process.  Process
+         * per-word as long as we have at least a full word left */
+        do {
+            if ((* (PERL_UINTMAX_T *) s) != span_word)  {
+                break;
+            }
+            s += PERL_WORDSIZE;
+        } while (s + PERL_WORDSIZE <= send);
+    }
+
+    /* Process per-character */
+    while (s < send) {
+        if (*s != span_byte) {
+            return s;
+        }
+        s++;
+    }
+
+    return s;
+}
+
 /*
  * pregexec and friends
  */
@@ -9013,7 +9062,7 @@ S_regrepeat(pTHX_ regexp *prog, char **startposp, const regnode *p,
 
 	c = (U8)*STRING(p);
 
-        /* Can use a simple loop if the pattern char to match on is invariant
+        /* Can use a simple find if the pattern char to match on is invariant
          * under UTF-8, or both target and pattern aren't UTF-8.  Note that we
          * can use UTF8_IS_INVARIANT() even if the pattern isn't UTF-8, as it's
          * true iff it doesn't matter if the argument is in UTF-8 or not */
@@ -9023,9 +9072,7 @@ S_regrepeat(pTHX_ regexp *prog, char **startposp, const regnode *p,
                  * since here, to match at all, 1 char == 1 byte */
                 loceol = scan + max;
             }
-	    while (scan < loceol && UCHARAT(scan) == c) {
-		scan++;
-	    }
+            scan = find_span_end(scan, loceol, c);
 	}
 	else if (reginfo->is_utf8_pat) {
             if (utf8_target) {
@@ -9045,11 +9092,9 @@ S_regrepeat(pTHX_ regexp *prog, char **startposp, const regnode *p,
             else if (! UTF8_IS_ABOVE_LATIN1(c)) {
 
                 /* Target isn't utf8; convert the character in the UTF-8
-                 * pattern to non-UTF8, and do a simple loop */
+                 * pattern to non-UTF8, and do a simple find */
                 c = EIGHT_BIT_UTF8_TO_NATIVE(c, *(STRING(p) + 1));
-                while (scan < loceol && UCHARAT(scan) == c) {
-                    scan++;
-                }
+                scan = find_span_end(scan, loceol, c);
             } /* else pattern char is above Latin1, can't possibly match the
                  non-UTF-8 target */
         }
@@ -9147,9 +9192,7 @@ S_regrepeat(pTHX_ regexp *prog, char **startposp, const regnode *p,
                 }
             }
             else if (c1 == c2) {
-                while (scan < loceol && UCHARAT(scan) == c1) {
-                    scan++;
-                }
+                scan = find_span_end(scan, loceol, c1);
             }
             else {
                 /* See comments in regmatch() CURLY_B_min_known_fail.  We avoid
