@@ -41,6 +41,10 @@
 
 #include "reentr.h"
 
+#ifdef I_WCHAR
+#  include <wchar.h>
+#endif
+
 /* If the environment says to, we can output debugging information during
  * initialization.  This is done before option parsing, and before any thread
  * creation, so can be a file-level static */
@@ -3072,7 +3076,6 @@ Perl__is_cur_LC_category_utf8(pTHX_ int category)
     const char *save_input_locale = NULL;
 
     bool is_utf8 = FALSE;                /* The return value */
-    STRLEN final_pos;
 
     /* The variables below are for the cache of previous lookups using this
      * function.  The cache is a C string, described at the definition for
@@ -3161,14 +3164,14 @@ Perl__is_cur_LC_category_utf8(pTHX_ int category)
     /* Here we don't have stored the utf8ness for the input locale.  We have to
      * calculate it */
 
-#  if defined(USE_LOCALE_CTYPE)    \
-    && (defined(MB_CUR_MAX) || (defined(HAS_NL_LANGINFO) && defined(CODESET)))
+#  if         defined(USE_LOCALE_CTYPE)                                  \
+      && (   (defined(HAS_NL_LANGINFO) && defined(CODESET))              \
+          ||  defined(HAS_MBTOWC))
 
-    { /* Next try nl_langinfo or MB_CUR_MAX if available */
+    {
+        const char *save_ctype_locale = NULL;
 
-        char *save_ctype_locale = NULL;
-
-        if (category != LC_CTYPE) { /* These work only on LC_CTYPE */
+        if (category != LC_CTYPE) {
 
             /* Get the current LC_CTYPE locale */
             save_ctype_locale = do_setlocale_c(LC_CTYPE, NULL);
@@ -3199,9 +3202,23 @@ Perl__is_cur_LC_category_utf8(pTHX_ int category)
                                               save_input_locale));
 
         /* Here the current LC_CTYPE is set to the locale of the category whose
-         * information is desired.  This means that nl_langinfo() and MB_CUR_MAX
+         * information is desired.  This means that nl_langinfo() and mbtowc()
          * should give the correct results */
 
+#    ifdef MB_CUR_MAX  /* But we can potentially rule out UTF-8ness, avoiding
+                          calling the functions if we have this */
+
+            /* Standard UTF-8 needs at least 4 bytes to represent the maximum
+             * Unicode code point. */
+
+            DEBUG_L(PerlIO_printf(Perl_debug_log, "\tMB_CUR_MAX=%d\n",
+                                       (int) MB_CUR_MAX));
+            if ((unsigned) MB_CUR_MAX < STRLENs(MAX_UNICODE_UTF8)) {
+                is_utf8 = FALSE;
+                goto finish_ctype;
+            }
+
+#    endif
 #    if defined(HAS_NL_LANGINFO) && defined(CODESET)
 
         { /* The task is easiest if the platform has this POSIX 2001 function */
@@ -3212,11 +3229,6 @@ Perl__is_cur_LC_category_utf8(pTHX_ int category)
                             "\tnllanginfo returned CODESET '%s'\n", codeset));
 
             if (codeset && strNE(codeset, "")) {
-                /* If we switched LC_CTYPE, switch back */
-                if (save_ctype_locale) {
-                    do_setlocale_c(LC_CTYPE, save_ctype_locale);
-                    Safefree(save_ctype_locale);
-                }
 
                               /* If the implementation of foldEQ() somehow were
                                * to change to not go byte-by-byte, this could
@@ -3229,56 +3241,36 @@ Perl__is_cur_LC_category_utf8(pTHX_ int category)
                 DEBUG_L(PerlIO_printf(Perl_debug_log,
                        "\tnllanginfo returned CODESET '%s'; ?UTF8 locale=%d\n",
                                                      codeset,         is_utf8));
-                goto finish_and_return;
+                goto finish_ctype;
             }
         }
 
 #    endif
-#    ifdef MB_CUR_MAX
+#    if defined(HAS_MBTOWC)
+     /* The task can be accomplished essentially 100% if have this
+      * function.  It was a late adder to C89, so very likely to have it. */
 
-        /* Here, either we don't have nl_langinfo, or it didn't return a
-         * codeset.  Try MB_CUR_MAX */
-
-        /* Standard UTF-8 needs at least 4 bytes to represent the maximum
-         * Unicode code point.  Since UTF-8 is the only non-single byte
-         * encoding we handle, we just say any such encoding is UTF-8, and if
-         * turns out to be wrong, other things will fail */
-        is_utf8 = (unsigned) MB_CUR_MAX >= STRLENs(MAX_UNICODE_UTF8);
-
-        DEBUG_L(PerlIO_printf(Perl_debug_log,
-                              "\tMB_CUR_MAX=%d; ?UTF8 locale=%d\n",
-                                   (int) MB_CUR_MAX,      is_utf8));
-
-        Safefree(save_input_locale);
-
-#      ifdef HAS_MBTOWC
-
-        /* ... But, most system that have MB_CUR_MAX will also have mbtowc(),
-         * since they are both in the C99 standard.  We can feed a known byte
-         * string to the latter function, and check that it gives the expected
-         * result */
-        if (is_utf8) {
+        {
             wchar_t wc;
             int len;
+
+           /* mbtowc() converts a byte string to a wide character.  Feed a byte
+            * string to it and check that the result is the expected Unicode
+            * code point */
 
             PERL_UNUSED_RESULT(mbtowc(&wc, NULL, 0));/* Reset any shift state */
             errno = 0;
             len = mbtowc(&wc, STR_WITH_LEN(REPLACEMENT_CHARACTER_UTF8));
 
+            DEBUG_L(PerlIO_printf(Perl_debug_log,
+                    "\treturn from mbtowc; len=%d; code_point=%x; errno=%d\n",
+                                   len,      (unsigned int) wc, errno));
 
-            if (   len != STRLENs(REPLACEMENT_CHARACTER_UTF8)
-                || wc != (wchar_t) UNICODE_REPLACEMENT)
-            {
-                is_utf8 = FALSE;
-                DEBUG_L(PerlIO_printf(Perl_debug_log, "\replacement=U+%x\n",
-                                                            (unsigned int)wc));
-                DEBUG_L(PerlIO_printf(Perl_debug_log,
-                        "\treturn from mbtowc=%d; errno=%d; ?UTF8 locale=0\n",
-                                               len,      errno));
-            }
+            is_utf8 = cBOOL(   len == STRLENs(REPLACEMENT_CHARACTER_UTF8)
+                            && wc == (wchar_t) UNICODE_REPLACEMENT);
         }
 
-#      endif
+      finish_ctype:
 
         /* If we switched LC_CTYPE, switch back */
         if (save_ctype_locale) {
@@ -3287,21 +3279,17 @@ Perl__is_cur_LC_category_utf8(pTHX_ int category)
         }
 
         goto finish_and_return;
-
-#    endif
-
     }
 
-#  else   /* nl_langinfo should work if available, so don't bother compiling this
-           fallback code.  The final fallback of looking at the name is
-           compiled, and will be executed if nl_langinfo fails */
+#    endif
+#  else
 
-    /* nl_langinfo not available or failed somehow.  Next try looking at the
-     * currency symbol to see if it disambiguates things.  Often that will be
-     * in the native script, and if the symbol isn't in UTF-8, we know that the
-     * locale isn't.  If it is non-ASCII UTF-8, we infer that the locale is
-     * too, as the odds of a non-UTF8 string being valid UTF-8 are quite small
-     * */
+        /* Here, we must have a C89 compiler that doesn't have mbtowc().  Next
+         * try looking at the currency symbol to see if it disambiguates
+         * things.  Often that will be in the native script, and if the symbol
+         * isn't in UTF-8, we know that the locale isn't.  If it is non-ASCII
+         * UTF-8, we infer that the locale is too, as the odds of a non-UTF8
+         * string being valid UTF-8 are quite small */
 
 #    ifdef HAS_LOCALECONV
 #      ifdef USE_LOCALE_MONETARY
@@ -3547,9 +3535,7 @@ Perl__is_cur_LC_category_utf8(pTHX_ int category)
     }
 
 #    endif
-#  endif /* the code that is compiled when no nl_langinfo */
-
-#  ifndef EBCDIC  /* On os390, even if the name ends with "UTF-8', it isn't a
+#    ifndef EBCDIC  /* On os390, even if the name ends with "UTF-8', it isn't a
                    UTF-8 locale */
 
     /* As a last resort, look at the locale name to see if it matches
@@ -3559,7 +3545,9 @@ Perl__is_cur_LC_category_utf8(pTHX_ int category)
      * its UTF-8ness, but if it has UTF8 in the name, it is extremely likely to
      * be a UTF-8 locale.  Similarly for the other common names */
 
-    final_pos = strlen(save_input_locale) - 1;
+    {
+    const Size_t final_pos = strlen(save_input_locale) - 1;
+
     if (final_pos >= 3) {
         const char *name = save_input_locale;
 
@@ -3602,6 +3590,7 @@ Perl__is_cur_LC_category_utf8(pTHX_ int category)
         is_utf8 = TRUE;
         goto finish_and_return;
     }
+    }
 
 #      endif
 #    endif
@@ -3610,7 +3599,7 @@ Perl__is_cur_LC_category_utf8(pTHX_ int category)
      * since we are about to return FALSE anyway, there is no point in doing
      * this extra work */
 
-#  if 0
+#    if 0
     if (instr(save_input_locale, "8859")) {
         DEBUG_L(PerlIO_printf(Perl_debug_log,
                              "Locale %s has 8859 in name, not UTF-8 locale\n",
@@ -3618,12 +3607,14 @@ Perl__is_cur_LC_category_utf8(pTHX_ int category)
         is_utf8 = FALSE;
         goto finish_and_return;
     }
-#  endif
+#    endif
 
     DEBUG_L(PerlIO_printf(Perl_debug_log,
                           "Assuming locale %s is not a UTF-8 locale\n",
                                     save_input_locale));
     is_utf8 = FALSE;
+
+#  endif /* the code that is compiled when no modern LC_CTYPE */
 
   finish_and_return:
 
@@ -3693,7 +3684,6 @@ Perl__is_cur_LC_category_utf8(pTHX_ int category)
 }
 
 #endif
-
 
 bool
 Perl__is_in_locale_category(pTHX_ const bool compiling, const int category)
