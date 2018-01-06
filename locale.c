@@ -3164,9 +3164,9 @@ Perl__is_cur_LC_category_utf8(pTHX_ int category)
     /* Here we don't have stored the utf8ness for the input locale.  We have to
      * calculate it */
 
-#  if         defined(USE_LOCALE_CTYPE)                                  \
-      && (   (defined(HAS_NL_LANGINFO) && defined(CODESET))              \
-          ||  defined(HAS_MBTOWC))
+#  if        defined(USE_LOCALE_CTYPE)                                  \
+     && (   (defined(HAS_NL_LANGINFO) && defined(CODESET))              \
+         || (defined(HAS_MBTOWC) || defined(HAS_MBRTOWC)))
 
     {
         const char *save_ctype_locale = NULL;
@@ -3246,21 +3246,40 @@ Perl__is_cur_LC_category_utf8(pTHX_ int category)
         }
 
 #    endif
-#    if defined(HAS_MBTOWC)
-     /* The task can be accomplished essentially 100% if have this
-      * function.  It was a late adder to C89, so very likely to have it. */
+#    if defined(HAS_MBTOWC) || defined(HAS_MBRTOWC)
+     /* The task can be accomplished essentially 100% if have either of these
+      * functions.  One was a late adder to C89, so very likely to have it. */
 
         {
             wchar_t wc;
             int len;
 
-           /* mbtowc() converts a byte string to a wide character.  Feed a byte
-            * string to it and check that the result is the expected Unicode
-            * code point */
+#      if defined(HAS_MBRTOWC) && defined(USE_ITHREADS)
+
+            mbstate_t ps;
+
+#      endif
+
+            /* mbrtowc() and mbtowc() convert a byte string to a wide
+             * character.  Feed a byte string to one of them and check that the
+             * result is the expected Unicode code point */
+
+#      if defined(HAS_MBRTOWC) && defined(USE_ITHREADS)
+            /* Prefer this function if available, as it's reentrant */
+
+            memset(&ps, 0, sizeof(ps));;
+            PERL_UNUSED_RESULT(mbrtowc(&wc, NULL, 0, &ps)); /* Reset any shift
+                                                               state */
+            errno = 0;
+            len = mbrtowc(&wc, STR_WITH_LEN(REPLACEMENT_CHARACTER_UTF8), &ps);
+
+#      else
 
             PERL_UNUSED_RESULT(mbtowc(&wc, NULL, 0));/* Reset any shift state */
             errno = 0;
             len = mbtowc(&wc, STR_WITH_LEN(REPLACEMENT_CHARACTER_UTF8));
+
+#      endif
 
             DEBUG_L(PerlIO_printf(Perl_debug_log,
                     "\treturn from mbtowc; len=%d; code_point=%x; errno=%d\n",
