@@ -627,6 +627,7 @@ PERLVAR(I, Latin1,	SV *)
 PERLVAR(I, UpperLatin1,	SV *)   /* Code points 128 - 255 */
 PERLVAR(I, AboveLatin1,	SV *)
 PERLVAR(I, InBitmap,	SV *)
+PERLVAR(I, Currency_Symbol,	SV *)
 
 PERLVAR(I, NonL1NonFinalFold,   SV *)
 PERLVAR(I, HasMultiCharFold,   SV *)

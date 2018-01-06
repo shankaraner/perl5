@@ -42,6 +42,7 @@
 
 #define PL_AboveLatin1		(vTHX->IAboveLatin1)
 #define PL_Assigned_invlist	(vTHX->IAssigned_invlist)
+#define PL_Currency_Symbol	(vTHX->ICurrency_Symbol)
 #define PL_DBcontrol		(vTHX->IDBcontrol)
 #define PL_DBcv			(vTHX->IDBcv)
 #define PL_DBgv			(vTHX->IDBgv)

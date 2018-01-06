@@ -1175,6 +1175,7 @@ perl_destruct(pTHXx)
     SvREFCNT_dec(PL_utf8_foldclosures);
     SvREFCNT_dec(PL_AboveLatin1);
     SvREFCNT_dec(PL_InBitmap);
+    SvREFCNT_dec(PL_Currency_Symbol);
     SvREFCNT_dec(PL_UpperLatin1);
     SvREFCNT_dec(PL_Latin1);
     SvREFCNT_dec(PL_NonL1NonFinalFold);
@@ -1191,6 +1192,7 @@ perl_destruct(pTHXx)
     PL_utf8_idcont	= NULL;
     PL_utf8_foldclosures = NULL;
     PL_AboveLatin1       = NULL;
+    PL_Currency_Symbol    = NULL;
     PL_InBitmap          = NULL;
     PL_HasMultiCharFold  = NULL;
 #ifdef USE_LOCALE_CTYPE

@@ -3175,7 +3175,6 @@ Perl__is_cur_LC_category_utf8(pTHX_ int category)
     char * name_pos;            /* position of 'delimited' in the cache, or 0
                                    if not there */
 
-
 #  ifdef LC_ALL
 
     assert(category != LC_ALL);
@@ -3362,18 +3361,18 @@ Perl__is_cur_LC_category_utf8(pTHX_ int category)
 #    ifdef USE_LOCALE_MONETARY
 
         /* If have LC_MONETARY, we can look at the currency symbol.  Often that
-         * will be in the native script.  We do this one first because there is
-         * just one string to examine, so potentially avoids work */
+         * will be in the native script and/or use a Unicode currency symbol */
 
         {
             const char *original_monetary_locale
-                        = switch_category_locale_to_template(LC_MONETARY,
-                                                             category,
-                                                             save_input_locale);
-            bool only_ascii = FALSE;
+                            = switch_category_locale_to_template(
+                                                            LC_MONETARY,
+                                                            category,
+                                                            save_input_locale);
             const U8 * currency_string
                             = (const U8 *) my_nl_langinfo(PERL_CRNCYSTR, FALSE);
-                                      /* 2nd param not relevant for this item */
+                                    /* 2nd param not relevant for this item */
+            const U8 * e = currency_string + strlen((char *) currency_string);
             const U8 * first_variant;
 
             assert(   *currency_string == '-'
@@ -3382,26 +3381,60 @@ Perl__is_cur_LC_category_utf8(pTHX_ int category)
 
             currency_string++;
 
-            if (is_utf8_invariant_string_loc(currency_string, 0, &first_variant))
+            if (! is_utf8_invariant_string_loc(currency_string,
+                                            e - currency_string,
+                                            &first_variant))
             {
-                DEBUG_L(PerlIO_printf(Perl_debug_log, "Couldn't get currency symbol for %s, or contains only ASCII; can't use for determining if UTF-8 locale\n", save_input_locale));
-                only_ascii = TRUE;
-            }
-            else {
-                is_utf8 = is_strict_utf8_string(first_variant, 0);
+                SCX_enum this_script;
+
+                if (   ! is_strict_utf8_string(first_variant, e - first_variant)
+                    || ! isSCRIPT_RUN((U8 * ) currency_string, e, TRUE, &this_script)
+                    ||   this_script == SCX_Unknown)
+                {
+                    is_utf8 = FALSE;
+                    restore_switched_locale(LC_MONETARY, original_monetary_locale);
+                    goto finish_and_return;
+                }
+
+                /* Here the currency string contains a variant under UTF-8, and
+                 * when interpreted as UTF-8, the string as a whole is in a
+                 * valid single Unicode script.  Look at the string's
+                 * individual characters.  If one sequence of the UTF-8 variant
+                 * bytes, when treated as UTF-8, evaluates to a code point
+                 * which is a Unicode currency symbol, then this must be a
+                 * UTF-8 locale.  The odds that any other locale would have
+                 * such a sequence in its currency symbol that would
+                 * coincidentally look like a valid Unicode currency symbol are
+                 * vanishingly small */
+
+                if (PL_Currency_Symbol == NULL) {
+                    PL_Currency_Symbol =
+                                _new_invlist_C_array(Currency_Symbol_invlist);
+                }
+
+                while (currency_string < e) {
+                    IV cp;
+                    Size_t len;
+
+                    if (UTF8_IS_INVARIANT(*currency_string)) {
+                        currency_string++;
+                        continue;
+                    }
+
+                    cp = utf8_to_uvchr_buf(currency_string, e, &len);
+
+                    if (_invlist_search(PL_Currency_Symbol, cp) > 0) {
+                        is_utf8 = TRUE;
+                        restore_switched_locale(LC_MONETARY,
+                                                original_monetary_locale);
+                        goto finish_and_return;
+                    }
+
+                    currency_string += len;
+                }
             }
 
             restore_switched_locale(LC_MONETARY, original_monetary_locale);
-
-            if (! only_ascii) {
-
-                /* It isn't a UTF-8 locale if the symbol is not legal UTF-8;
-                 * otherwise assume the locale is UTF-8 if and only if the symbol
-                 * is non-ascii UTF-8. */
-                DEBUG_L(PerlIO_printf(Perl_debug_log, "\t?Currency symbol for %s is UTF-8=%d\n",
-                                        save_input_locale, is_utf8));
-                goto finish_and_return;
-            }
         }
 
 #    endif /* USE_LOCALE_MONETARY */
