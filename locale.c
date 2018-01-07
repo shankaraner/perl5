@@ -3244,9 +3244,7 @@ Perl__is_cur_LC_category_utf8(pTHX_ int category)
     /* Here we don't have stored the utf8ness for the input locale.  We have to
      * calculate it */
 
-#  if        defined(USE_LOCALE_CTYPE)                                  \
-     && (   (defined(HAS_NL_LANGINFO) && defined(CODESET))              \
-         || (defined(HAS_MBTOWC) || defined(HAS_MBRTOWC)))
+#  ifdef USE_LOCALE_CTYPE
 
     {
         const char *original_ctype_locale
@@ -3342,21 +3340,161 @@ Perl__is_cur_LC_category_utf8(pTHX_ int category)
 
             is_utf8 = cBOOL(   len == STRLENs(REPLACEMENT_CHARACTER_UTF8)
                             && wc == (wchar_t) UNICODE_REPLACEMENT);
+            restore_switched_locale(LC_CTYPE, original_ctype_locale);
+            goto finish_and_return;
+        }
+
+#    else   /* Below, don't have mbtowc nor mbrtowc */
+
+        /* Here, we don't have mbtowc().  We can use earlier functions to see
+         * if the first 256 code points match what we expect in a UTF-8 locale.
+         * If they don't, we can rule out UTF-8.  But if they do match, it
+         * could also be 8859-1, which is indistinguishable in the first 256
+         * code points by these functions, or it could be something very
+         * similar to 8859-1; we can't know for sure.  There is also a bug in
+         * some platforms, in which locales that are ASCIIish-only can't be
+         * distinguished from UTF-8 by these functions. */
+
+        {
+            unsigned int i;
+            unsigned int maybe_ASCII = 0;
+
+            for (i = 0; i < 256; i++) {
+
+                /* This makes this portable to EBCDIC */
+                unsigned int j = LATIN1_TO_NATIVE(i);
+
+                U8 dummy_buf[UTF8_MAXBYTES_CASE+1];
+                STRLEN dummy_len;
+                IV uc;
+
+                if (   cBOOL(isalnum(j)) != cBOOL(isALPHANUMERIC(j))
+                    || cBOOL(isalpha(j)) != cBOOL(isALPHA_L1(j))
+                    || cBOOL(iscntrl(j)) != cBOOL(isCNTRL_L1(j))
+                    || cBOOL(isdigit(j)) != cBOOL(isDIGIT_L1(j))
+                    || cBOOL(isgraph(j)) != cBOOL(isGRAPH_L1(j))
+                    || cBOOL(islower(j)) != cBOOL(isLOWER_L1(j))
+                    || cBOOL(isprint(j)) != cBOOL(isPRINT_L1(j))
+                    || cBOOL(ispunct(j)) != cBOOL(isPUNCT_L1(j))
+                    || cBOOL(isspace(j)) != cBOOL(isSPACE_L1(j))
+                    || cBOOL(isupper(j)) != cBOOL(isUPPER_L1(j))
+                    || cBOOL(isxdigit(j))!= cBOOL(isXDIGIT_L1(j))
+                    || tolower(j) != (int) toLOWER_L1(j))
+                {
+                    /* An ASCII locale could have both cntrl, and its
+                     * complement return 0 */
+                    if (i > 127 && iscntrl(j) == 0 && isprint(j) == 0) {
+                        maybe_ASCII++;
+                        continue;
+                    }
+
+                    /* Otherwise something really failed and isn't any of:
+                     * ASCII, 8859-1, nor UTF-8 */
+                    is_utf8 = FALSE;
+                    restore_switched_locale(LC_CTYPE, original_ctype_locale);
+                    goto finish_and_return;
+                }
+
+                /* Calculate the Unicode uppercase */
+                uc = toUPPER_uvchr(j, dummy_buf, &dummy_len);
+
+                /* If it is out of range of these functions, they will return
+                 * the input itself */
+                if (uc > 255) {
+                    uc = j;
+                }
+                if (toupper(j) != uc) {
+                    is_utf8 = FALSE;
+                    restore_switched_locale(LC_CTYPE, original_ctype_locale);
+                    goto finish_and_return;
+                }
+            } /* End of 0..255 loop */
+
+            if (maybe_ASCII == 0) {
+
+                /* Here, all code points 0-255 match what both ISO 8859-1 (or a
+                 * very similar one) and a UTF-8 locale think.  But we need
+                 * more information to distinguish between these two */
+
+#      ifdef MB_CUR_MAX
+
+                /*  In the unlikely event that the compiler has MB_CUR_MAX,
+                 *  from tests above we have that extra information, as this is
+                 *  a multi-byte locale.  khw doesn't think there exist any
+                 *  other multi-byte locales which are consistent with 8859-1
+                 *  in the range 0-255.   (This event is unlikely because we
+                 *  only got here because mbtowc() doesn't exist on this
+                 *  platform, and it's unlikely that such a platform would have
+                 *  MB_CUR_MAX) */
+
+                is_utf8 = TRUE;
+                restore_switched_locale(LC_CTYPE, original_ctype_locale);
+                goto finish_and_return;
+
+#      endif
+
+                /* Otherwise drop down to the other tests */
+            }
+            else {
+
+                /* Implementations of ASCII locales could decide that all
+                 * isfoo() functions for non-ASCII return 0.  khw thinks it
+                 * sufficient to have tested just iscntrl() and its complement,
+                 * isprint(), which we did above and counted the results.  But
+                 * if the count is fewer than all such code points, it's a
+                 * defective locale definition, and it's not 8859-1, so can't
+                 * be UTF8 either */
+
+                if (maybe_ASCII < 128) {
+                    is_utf8 = FALSE;
+                    restore_switched_locale(LC_CTYPE, original_ctype_locale);
+                    goto finish_and_return;
+                }
+
+                /* Here, we have a locale that looks to be ASCII.  As mentioned
+                 * above, some, platforms have the bug where all isfoo()
+                 * functions return 0 for all non-ASCII code points in a UTF-8
+                 * locale.  (You must use the iswfoo() equivalents for them to
+                 * work properly, even though the code point fits in a byte.
+                 * The same applies to the case changing functions.) This makes
+                 * UTF-8 locales indistinguishable from ASCII locale based on
+                 * these functions.  (khw presumes that the bug isn't just for
+                 * UTF-8 locales, but any multi-byte one.)   We need further
+                 * information to decide between ASCII and UTF-8.  This section
+                 * of code doesn't get compiled unless we are missing some late
+                 * adders to C89, so it's unlikey any of the wide char
+                 * functions will be available.  So we continue on to try other
+                 * checks */
+            }
         }
 
         restore_switched_locale(LC_CTYPE, original_ctype_locale);
-        goto finish_and_return;
-    }
 
-#    endif
+#    endif   /* All LC_CTYPE sub-varieties */
+
+    } /* End of USE_LC_CTYPE */
+
 #  else
 
-        /* Here, we must have a C89 compiler that doesn't have mbtowc().  Next
-         * try looking at the currency symbol to see if it disambiguates
-         * things.  Often that will be in the native script, and if the symbol
-         * isn't in UTF-8, we know that the locale isn't.  If it is non-ASCII
-         * UTF-8, we infer that the locale is too, as the odds of a non-UTF8
-         * string being valid UTF-8 are quite small */
+    /* To get here, we either are not to look at LC_CTYPE on this platform or
+     * we have a C89 compiler without mbtowc(), and the locale is one of:
+     *  a) UTF-8
+     *  b) 8859-1-ish
+     *  c) ASCII-ish
+     * To try to tease apart which, we can look at various functions sensitive
+     * to other categories, if available. */
+
+#  endif /* End of #else for USE_LC_CTYPE */
+
+    /* There's no point in compiling the code below if we did use LC_CTYPE and
+     * have mbtowc().  (Also only compile if have access to the other
+     * categories) */
+
+#  if   (  ! defined(USE_LOCALE_CTYPE) || (   ! defined(HAS_MBTOWC)         \
+                                           && ! defined(HAS_MBRTOWC)))      \
+     && (   (defined(USE_LOCALE_TIME)      &&   defined(HAS_STRFTIME))      \
+         || (defined(USE_LOCALE_MONETARY)  &&   defined(HAS_LOCALECONV))    \
+         || (defined(USE_LOCALE_MESSAGES)  &&   defined(HAS_SYS_ERRLIST)))
 
 #    ifdef USE_LOCALE_MONETARY
 
