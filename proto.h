@@ -5393,7 +5393,7 @@ PERL_CALLCONV void	Perl__invlist_dump(pTHX_ PerlIO *file, I32 level, const char*
 #define PERL_ARGS_ASSERT__INVLIST_DUMP	\
 	assert(file); assert(indent); assert(invlist)
 #endif
-#if defined(PERL_IN_REGCOMP_C) || defined(PERL_IN_PERL_C) || defined(PERL_IN_UTF8_C)
+#if defined(PERL_IN_REGCOMP_C) || defined(PERL_IN_PERL_C) || defined(PERL_IN_UTF8_C) || defined(PERL_IN_LOCALE_C)
 PERL_CALLCONV bool	Perl__invlistEQ(pTHX_ SV* const a, SV* const b, const bool complement_b);
 #define PERL_ARGS_ASSERT__INVLISTEQ	\
 	assert(a); assert(b)
@@ -5435,11 +5435,6 @@ PERL_STATIC_INLINE UV	S__invlist_len(SV* const invlist)
 	assert(invlist)
 #endif
 
-PERL_CALLCONV SSize_t	Perl__invlist_search(SV* const invlist, const UV cp)
-			__attribute__warn_unused_result__;
-#define PERL_ARGS_ASSERT__INVLIST_SEARCH	\
-	assert(invlist)
-
 PERL_CALLCONV HV*	Perl__swash_inversion_hash(pTHX_ SV* const swash)
 			__attribute__warn_unused_result__;
 #define PERL_ARGS_ASSERT__SWASH_INVERSION_HASH	\
@@ -5458,6 +5453,13 @@ PERL_STATIC_INLINE UV*	S_invlist_array(SV* const invlist)
 #define PERL_ARGS_ASSERT_INVLIST_ARRAY	\
 	assert(invlist)
 #endif
+
+#endif
+#if defined(PERL_IN_REGCOMP_C) || defined(PERL_IN_REGEXEC_C) || defined(PERL_IN_UTF8_C) || defined(PERL_IN_LOCALE_C)
+PERL_CALLCONV SSize_t	Perl__invlist_search(SV* const invlist, const UV cp)
+			__attribute__warn_unused_result__;
+#define PERL_ARGS_ASSERT__INVLIST_SEARCH	\
+	assert(invlist)
 
 #endif
 #if defined(PERL_IN_REGCOMP_C) || defined(PERL_IN_REGEXEC_C) || defined(PERL_IN_UTF8_C) || defined(PERL_IN_TOKE_C)

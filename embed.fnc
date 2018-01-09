@@ -1336,7 +1336,7 @@ Ap	|void	|regdump	|NN const regexp* r
 ApM	|SV*	|regclass_swash	|NULLOK const regexp *prog \
 				|NN const struct regnode *node|bool doinit \
 				|NULLOK SV **listsvp|NULLOK SV **altsvp
-#if defined(PERL_IN_REGCOMP_C) || defined(PERL_IN_PERL_C) || defined(PERL_IN_UTF8_C)
+#if defined(PERL_IN_REGCOMP_C) || defined(PERL_IN_PERL_C) || defined(PERL_IN_UTF8_C) || defined(PERL_IN_LOCALE_C)
 EXpR	|SV*	|_new_invlist_C_array|NN const UV* const list
 EXMp	|bool	|_invlistEQ	|NN SV* const a|NN SV* const b|const bool complement_b
 #endif
@@ -1734,12 +1734,14 @@ EXp	|SV*	|_core_swash_init|NN const char* pkg|NN const char* name \
 		|NN SV* listsv|I32 minbits|I32 none \
 		|NULLOK SV* invlist|NULLOK U8* const flags_p
 #endif
+#if defined(PERL_IN_REGCOMP_C) || defined(PERL_IN_REGEXEC_C) || defined(PERL_IN_UTF8_C) || defined(PERL_IN_LOCALE_C)
+EXpMRn	|SSize_t|_invlist_search	|NN SV* const invlist|const UV cp
+#endif
 #if defined(PERL_IN_REGCOMP_C) || defined(PERL_IN_REGEXEC_C) || defined(PERL_IN_UTF8_C)
 EiMRn	|UV*	|invlist_array	|NN SV* const invlist
 EiMRn	|bool*	|get_invlist_offset_addr|NN SV* invlist
 EiMRn	|UV	|_invlist_len	|NN SV* const invlist
 EMiRn	|bool	|_invlist_contains_cp|NN SV* const invlist|const UV cp
-EXpMRn	|SSize_t|_invlist_search	|NN SV* const invlist|const UV cp
 EXMpR	|SV*	|_get_swash_invlist|NN SV* const swash
 EXMpR	|HV*	|_swash_inversion_hash	|NN SV* const swash
 #endif

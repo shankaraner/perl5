@@ -3142,16 +3142,61 @@ S_restore_switched_locale(pTHX_ const int category, const char * const original_
     Safefree(original_locale);
 }
 
+/* The following two functions are used to determine if a locale is UTF-8 or
+ * that is isn't.  For modern systems, this is easy.  We use nl_langinfo() to
+ * look at the codeset.  For older systems that have a full implementation of
+ * C89, we can feed a byte string to mbtowc() to see if it returns the expected
+ * value that a UTF-8 string would give.  mbtwoc() was a late adder to C89, and
+ * is listed in some documentation as as not being available until C99.  To
+ * accommodate systems that don't have it, heuristics are employed in code that
+ * is compiled only when mbtowc() isn't available, or if we are compiled to not
+ * pay attention to LC_CTYPE (as both nl_langinfo() and mbtowc() are based on
+ * that category).  The heuristics include looking at the locale's currency
+ * symbol, and seeing if some of the bytes that form it, when interpreted as
+ * UTF-8, yield a Unicode currency symbol (not including '$').  Failing that,
+ * the names of the months and weekdays, etc., in the locale are checked to see
+ * if they are legal UTF-8 and all in the same script; similarly for the error
+ * messages.  If "enough" bytes are legal UTF-8 (beyond ASCII), the locale is
+ * considered UTF-8.  Otherwise the locale name is checked to see if it
+ * contains some variant of "UTF-8".  The result will very likely be correct
+ * for locales that have a non-ASCII currency symbol, such as the Euro or the
+ * Pound Sterling, and for languages that have commonly used non-ASCII
+ * characters, but for notably English in a locale that uses strictly ASCII
+ * (like '$') for a currency symbol, it comes down to the locale's name, which
+ * sometimes gives incorrect results.  The locale name is also relied on for
+ * other Latin-based languages that use an ASCII string like 'kr' for their
+ * currency symbol. */
+
+#  if   (  ! defined(USE_LOCALE_CTYPE) || (   ! defined(HAS_MBTOWC)         \
+                                           && ! defined(HAS_MBRTOWC)))      \
+     && (   (defined(USE_LOCALE_TIME)      &&   defined(HAS_STRFTIME))      \
+         || (defined(USE_LOCALE_MONETARY)  &&   defined(HAS_LOCALECONV))    \
+         || (defined(USE_LOCALE_MESSAGES)  &&   defined(HAS_SYS_ERRLIST)))
+
+    /* For this to compile, we don't have a full LC_CTYPE, and we have other
+     * means available to us for determining utf8ness */
+#    define USE_ALTERNATE_METHOD_FOR_UTF8NESS
+
+    /* When using these other methods, we compile this helper function, which
+     * is declared here and not embed.fnc, because of the complexity of knowing
+     * if we will use it */
+    STATIC bool S_helper_is_cur_LC_category_utf8(pTHX_ const U8 * string,
+                         U8 * distinct_variants, SCX_enum * this_script);
+#    define helper_is_cur_LC_category_utf8(a,b,c)                           \
+                            S_helper_is_cur_LC_category_utf8(aTHX_ a,b,c)
+#    define PERL_ARGS_ASSERT_HELPER_IS_CUR_LC_CATEGORY_UTF8	            \
+	assert(distinct_variants); assert(overall_script)
+
+#  endif
+
 bool
 Perl__is_cur_LC_category_utf8(pTHX_ int category)
 {
     /* Returns TRUE if the current locale for 'category' is UTF-8; FALSE
-     * otherwise. 'category' may not be LC_ALL.  If the platform doesn't have
-     * nl_langinfo(), nor MB_CUR_MAX, this employs a heuristic, which hence
-     * could give the wrong result.  The result will very likely be correct for
-     * languages that have commonly used non-ASCII characters, but for notably
-     * English, it comes down to if the locale's name ends in something like
-     * "UTF-8".  It errs on the side of not being a UTF-8 locale. */
+     * otherwise. 'category' may not be LC_ALL.  It generally works by changing
+     * the LC_CTYPE locale to the input category's locale (if they differ), and
+     * looking to see if the LC_CTYPE functions indicate it is UTF-8 or not.
+     * It restores the locale before return if it changed it. */
 
     /* Name of current locale corresponding to the input category */
     const char *save_input_locale = NULL;
@@ -3485,16 +3530,20 @@ Perl__is_cur_LC_category_utf8(pTHX_ int category)
      * to other categories, if available. */
 
 #  endif /* End of #else for USE_LC_CTYPE */
+#  ifdef USE_ALTERNATE_METHOD_FOR_UTF8NESS
 
-    /* There's no point in compiling the code below if we did use LC_CTYPE and
-     * have mbtowc().  (Also only compile if have access to the other
-     * categories) */
+    {
+        SCX_enum this_script = SCX_Unknown;
 
-#  if   (  ! defined(USE_LOCALE_CTYPE) || (   ! defined(HAS_MBTOWC)         \
-                                           && ! defined(HAS_MBRTOWC)))      \
-     && (   (defined(USE_LOCALE_TIME)      &&   defined(HAS_STRFTIME))      \
-         || (defined(USE_LOCALE_MONETARY)  &&   defined(HAS_LOCALECONV))    \
-         || (defined(USE_LOCALE_MESSAGES)  &&   defined(HAS_SYS_ERRLIST)))
+        /* If we get enough unique sequences that would be legal UTF-8, we
+         * call the locale UTF-8.  This is set currently so that a 4th unique
+         * two-byte sequence triggers this  This may sound too small, but keep
+         * in mind that UTF-8 is highly structured. */
+#    define VARIANTS_SIZE 7
+
+        /* We allocate extra space so that when we catenate to the end, we
+         * don't have to worry about overflowing the buffer */
+        U8 distinct_variants[VARIANTS_SIZE + UTF8_MAXBYTES + 1] = { '\0' };
 
 #    ifdef USE_LOCALE_MONETARY
 
@@ -3519,20 +3568,20 @@ Perl__is_cur_LC_category_utf8(pTHX_ int category)
 
             currency_string++;
 
+            if (! helper_is_cur_LC_category_utf8(currency_string,
+                                                 distinct_variants,
+                                                 &this_script))
+            {
+                is_utf8 = FALSE;
+                restore_switched_locale(LC_MONETARY,
+                                        original_monetary_locale);
+                goto finish_and_return;
+            }
+
             if (! is_utf8_invariant_string_loc(currency_string,
                                             e - currency_string,
                                             &first_variant))
             {
-                SCX_enum this_script;
-
-                if (   ! is_strict_utf8_string(first_variant, e - first_variant)
-                    || ! isSCRIPT_RUN((U8 * ) currency_string, e, TRUE, &this_script)
-                    ||   this_script == SCX_Unknown)
-                {
-                    is_utf8 = FALSE;
-                    restore_switched_locale(LC_MONETARY, original_monetary_locale);
-                    goto finish_and_return;
-                }
 
                 /* Here the currency string contains a variant under UTF-8, and
                  * when interpreted as UTF-8, the string as a whole is in a
@@ -3572,140 +3621,211 @@ Perl__is_cur_LC_category_utf8(pTHX_ int category)
                 }
             }
 
+#      if defined(HAS_STRFTIME) && defined(USE_LOCALE_TIME)
+
+            /* Experience has shown that sometimes the currency symbol is in
+             * Latin, whereas the time strings s are native.  So reset the
+             * currency so that the code below doesn't decide it's a mixed
+             * script */
+
+            if (this_script == SCX_Latin) {
+                this_script = SCX_Unknown;
+            }
+
+#      endif
+
             restore_switched_locale(LC_MONETARY, original_monetary_locale);
         }
 
 #    endif /* USE_LOCALE_MONETARY */
 #    if defined(HAS_STRFTIME) && defined(USE_LOCALE_TIME)
 
-    /* Still haven't found a non-ASCII string to disambiguate UTF-8 or not.  Try
-     * the names of the months and weekdays, timezone, and am/pm indicator */
+        /* If have LC_TIME, we can look at all the names of e.g. the weekdays
+         * and months to see if they are in UTF-8 or not.
+         *
+        * Consider the sequence "\xC6\xB1".  If this is a UTF-8 locale, that
+        * sequence would mean U+01B1: LATIN CAPITAL LETTER UPSILON.  However,
+        * if the locale is 8859-2 it would mean 'Latin C with acute' followed
+        * by 'Latin a with ogonek'.  There are several possible sequences in
+        * 8859-2 which coincidentally are syntactically valid UTF-8.  It's not
+        * hard to imagine that you could form entire words of such sequences as
+        * long as you can mix in the Latin characters in ASCII.  Now consider
+        * another plausible 8859-2 sequence that is also syntactically valid
+        * UTF-8: 'Latin i acute' (\xCD) followed by 'l with stroke' (\xB3).
+        * But in UTF-8, that yields U+0373: GREEK SMALL LETTER ARCHAIC SAMPI.
+        * Below we check that when interpreted as UTF-8, the byte sequences
+        * form a single script, across all the weekday and month names.  Any
+        * ASCII Latin characters mixed in would show up as a mixed script, and
+        * thus we would say that the locale isn't UTF-8.  That means that for
+        * the script to be UTF-8, every sequence, except for some punctuation,
+        * must be non-ASCII and in the very structured UTF-8 form, and each
+        * must evaluate to the same script.  The odds of such a coincidence
+        * become very small.  Effectively what this does (on an ASCII platform)
+        * is limit the possible confusables to a start byte in the range of
+        * C2-CD (with anything above CA unlikely).
+        *
+        * The number of plausible sequences in 8859-2 that are syntactically
+        * UTF-8 is quite small.  The code now keeps track of how many distinct
+        * sequences are present.  The more of these there are, the less likely
+        * that the text is not UTF-8, so if we get enough of these, we call it
+        * UTF-8. */
         {
             const char *original_time_locale
-                            = switch_category_locale_to_template(LC_TIME,
-                                                                 category,
-                                                                 save_input_locale);
+                            = switch_category_locale_to_template(
+                                                            LC_TIME,
+                                                            category,
+                                                            save_input_locale);
             int hour = 10;
             bool is_dst = FALSE;
             int dom = 1;
             int month = 0;
             int i;
-            char * formatted_time;
+            char * time_string;
 
             /* Here the current LC_TIME is set to the locale of the category
-             * whose information is desired.  Look at all the days of the week and
-             * month names, and the timezone and am/pm indicator for UTF-8 variant
-             * characters.  The first such a one found will tell us if the locale
-             * is UTF-8 or not */
+             * whose information is desired.  Look at all the days of the week
+             * and month names, and the timezone and am/pm indicator for UTF-8
+             * variant characters.  The first such a one found will tell us if
+             * the locale is UTF-8 or not */
 
             for (i = 0; i < 7 + 12; i++) {  /* 7 days; 12 months */
-                formatted_time = my_strftime("%A %B %Z %p",
-                                0, 0, hour, dom, month, 2012 - 1900, 0, 0, is_dst);
-                if ( ! formatted_time
-                    || is_utf8_invariant_string((U8 *) formatted_time, 0))
-                {
+                time_string = my_strftime("%A %B",  /* zone and am/pm may not
+                                                       exist in the locale */
+                            0, 0, hour, dom, month, 2012 - 1900, 0, 0, is_dst);
 
-                    /* Here, we didn't find a non-ASCII.  Try the next time through
-                     * with the complemented dst and am/pm, and try with the next
-                     * weekday.  After we have gotten all weekdays, try the next
-                     * month */
-                    is_dst = ! is_dst;
-                    hour = (hour + 12) % 24;
-                    dom++;
-                    if (i > 6) {
-                        month++;
-                    }
-                    continue;
+                if (! helper_is_cur_LC_category_utf8((U8 *) time_string,
+                                                            distinct_variants,
+                                                            &this_script))
+                {
+                    is_utf8 = FALSE;
+                    restore_switched_locale(LC_TIME, original_time_locale);
+                    goto finish_and_return;
                 }
 
-                /* Here, we have a non-ASCII.  Return TRUE is it is valid UTF8;
-                 * false otherwise.  But first, restore LC_TIME to its original
-                 * locale if we changed it */
-                restore_switched_locale(LC_TIME, original_time_locale);
-
-                DEBUG_L(PerlIO_printf(Perl_debug_log, "\t?time-related strings for %s are UTF-8=%d\n",
-                                    save_input_locale,
-                                    is_utf8_string((U8 *) formatted_time, 0)));
-                is_utf8 = is_utf8_string((U8 *) formatted_time, 0);
-                goto finish_and_return;
+                is_dst = ! is_dst;
+                hour = (hour + 12) % 24;
+                dom++;
+                if (i > 6) {
+                    month++;
+                }
             }
 
-            /* Falling off the end of the loop indicates all the names were just
-             * ASCII.  Go on to the next test.  If we changed it, restore LC_TIME
-             * to its original locale */
             restore_switched_locale(LC_TIME, original_time_locale);
-            DEBUG_L(PerlIO_printf(Perl_debug_log, "All time-related words for %s contain only ASCII; can't use for determining if UTF-8 locale\n", save_input_locale));
         }
 
 #    endif
+#    if defined(USE_LOCALE_MESSAGES) && defined(HAS_SYS_ERRLIST)
 
-#    if 0 && defined(USE_LOCALE_MESSAGES) && defined(HAS_SYS_ERRLIST)
+        /* If we have LC_MESSAGES, we can look at all the strerror() messages
+         * on the platform to see if they are in UTF-8 or not.  This is not
+         * likely to add information, because experience has shown that the
+         * messages may not have been translated into the locale.  The currency
+         * symbol and time strings are much more likely to have been
+         * translated.  On our dromedary test machine, which has over 700
+         * locales, this added no value beyond looking at the currency symbol
+         * and the time strings.  But it's easy enough to do, and the result
+         * gets cached, so won't slow things down appreciably. */
 
-    /* This code is ifdefd out because it was found to not be necessary in testing
-     * on our dromedary test machine, which has over 700 locales.  There, this
-     * added no value to looking at the currency symbol and the time strings.  I
-     * left it in so as to avoid rewriting it if real-world experience indicates
-     * that dromedary is an outlier.  Essentially, instead of returning abpve if we
-     * haven't found illegal utf8, we continue on and examine all the strerror()
-     * messages on the platform for utf8ness.  If all are ASCII, we still don't
-     * know the answer; but otherwise we have a pretty good indication of the
-     * utf8ness.  The reason this doesn't help much is that the messages may not
-     * have been translated into the locale.  The currency symbol and time strings
-     * are much more likely to have been translated.  */
         {
-            int e;
-            bool non_ascii = FALSE;
             const char *original_messages_locale
-                            = switch_category_locale_to_template(LC_MESSAGES,
-                                                                 category,
-                                                                 save_input_locale);
-            const char * errmsg = NULL;
+                            = switch_category_locale_to_template(
+                                                            LC_MESSAGES,
+                                                            category,
+                                                            save_input_locale);
+            int i;
+            const char * errmsg;
 
-            /* Here the current LC_MESSAGES is set to the locale of the category
-             * whose information is desired.  Look through all the messages.  We
-             * can't use Strerror() here because it may expand to code that
-             * segfaults in miniperl */
+            /* We can't use Strerror() here because it may expand to code that
+            * segfaults in miniperl */
 
-            for (e = 0; e <= sys_nerr; e++) {
+            for (i = 0; i < sys_nerr; i++) {
                 errno = 0;
-                errmsg = sys_errlist[e];
+                errmsg = sys_errlist[i];
                 if (errno || !errmsg) {
                     break;
                 }
+
                 errmsg = savepv(errmsg);
-                if (! is_utf8_invariant_string((U8 *) errmsg, 0)) {
-                    non_ascii = TRUE;
-                    is_utf8 = is_utf8_string((U8 *) errmsg, 0);
-                    break;
+
+                if (! helper_is_cur_LC_category_utf8((U8 *) errmsg,
+                                                     distinct_variants,
+                                                     &this_script))
+                {
+                    is_utf8 = FALSE;
+                    restore_switched_locale(LC_MESSAGES,
+                                            original_messages_locale);
+                    goto finish_and_return;
                 }
+
+                Safefree(errmsg);
             }
-            Safefree(errmsg);
 
             restore_switched_locale(LC_MESSAGES, original_messages_locale);
-
-            if (non_ascii) {
-
-                /* Any non-UTF-8 message means not a UTF-8 locale; if all are valid,
-                 * any non-ascii means it is one; otherwise we assume it isn't */
-                DEBUG_L(PerlIO_printf(Perl_debug_log, "\t?error messages for %s are UTF-8=%d\n",
-                                    save_input_locale,
-                                    is_utf8));
-                goto finish_and_return;
-            }
-
-            DEBUG_L(PerlIO_printf(Perl_debug_log, "All error messages for %s contain only ASCII; can't use for determining if UTF-8 locale\n", save_input_locale));
         }
 
 #    endif
-#    ifndef EBCDIC  /* On os390, even if the name ends with "UTF-8', it isn't a
-                   UTF-8 locale */
+
+        /* LC_COLLATE might somehow be used to distinguish, but khw conducted
+         * some experiments with strcoll(), and did not find an obvious way for
+         * that to help.  For example, errno is still 0 after having been
+         * passed an illegal UTF-8 sequence.
+         *
+         * Here, we have gone through all the categories available to us
+         * without finding anything that would preclude this locale from being
+         * UTF-8.  This means that any bytes found that are variants under
+         * UTF-8 are syntactically legal UTF-8, and when interpreted as UTF-8,
+         * all come from the same script.  For non-Latin scripts, this is
+         * conclusive that the script is UTF-8, because it means that there are
+         * no ASCII-range characters mixed in that aren't punctuation-type, so
+         * both syntactically and semantically it looks like UTF-8.  The reason
+         * it isn't so for Latin scripts is because of those ASCII range latin
+         * characters.  They can be mixed in and increase greatly the odds that
+         * something that has just a few things that look like UTF-8 (and in
+         * the Latin script) is just a coincidence.  To catch these, we keep a
+         * list of the distinct variants found.  More than just a few greatly
+         * lowers the odds of a coincidence. */
+
+        if (   this_script != SCX_Latin
+            || strlen((char *) distinct_variants) > VARIANTS_SIZE)
+        {
+            is_utf8 = TRUE;
+            goto finish_and_return;
+        }
+    }
+
+    /* To get here, we have gone through all the categories we are allowed to
+     * that have any real chance of helping us figure out if the locale is
+     * UTF-8, and there just haven't been very many variant characters
+     * encountered that could show UTF-8ness.  This could happen in a Latin
+     * script locale where accented characters are rare.  Or even non-existent,
+     * as in English.  However above, if we have access to the monetary locale,
+     * such locales that use a currency symbol that isn't a '$' or just text
+     * would have been caught.  In the unlikely event that we reached here with
+     * LC_CTYPE, LC_CTIME, and MB_CUR_MAX available, we can say that this is a
+     * UTF-8 locale, as above we would have verified that it is multi-byte
+     * consistent with ASCII, and the time strings, if they weren't ASCII nor
+     * UTF-8, would have generated failures. */
+
+#    if defined(USE_LC_CTYPE) && defined(USE_LC_TIME) && defined(MB_CUR_MAX)
+
+    is_utf8 = TRUE;
+    goto finish_and_return;
+
+#    endif
 
     /* As a last resort, look at the locale name to see if it matches
-     * qr/UTF -?  * 8 /ix, or some other common locale names.  This "name", the
-     * return of setlocale(), is actually defined to be opaque, so we can't
-     * really rely on the absence of various substrings in the name to indicate
-     * its UTF-8ness, but if it has UTF8 in the name, it is extremely likely to
-     * be a UTF-8 locale.  Similarly for the other common names */
+     *
+     *      qr/ UTF -? 8 /ix.
+     *
+     * This "name", the return of setlocale(), is actually defined to be
+     * opaque, so we can't really rely on the absence of various substrings in
+     * the name to indicate its UTF-8ness, but if it has UTF8 in the name, it
+     * is extremely likely to be a UTF-8 locale.
+     *
+     * Unfortunately, we can't do this on os390, as even if the name ends with
+     * "UTF-8', it isn't necessarily a UTF-8 locale */
+
+#    ifndef EBCDIC
 
     {
         const Size_t final_pos = strlen(save_input_locale) - 1;
@@ -3752,24 +3872,14 @@ Perl__is_cur_LC_category_utf8(pTHX_ int category)
             is_utf8 = TRUE;
             goto finish_and_return;
         }
-    }
 
 #      endif
-#    endif
 
-    /* Other common encodings are the ISO 8859 series, which aren't UTF-8.  But
-     * since we are about to return FALSE anyway, there is no point in doing
-     * this extra work */
-
-#    if 0
-    if (instr(save_input_locale, "8859")) {
-        DEBUG_L(PerlIO_printf(Perl_debug_log,
-                             "Locale %s has 8859 in name, not UTF-8 locale\n",
-                             save_input_locale));
-        is_utf8 = FALSE;
-        goto finish_and_return;
     }
-#    endif
+
+#    endif  /* End of not EBCDIC */
+
+    /* The name doesn't indicate it's a UTF-8 locale */
 
     DEBUG_L(PerlIO_printf(Perl_debug_log,
                           "Assuming locale %s is not a UTF-8 locale\n",
@@ -3845,7 +3955,106 @@ Perl__is_cur_LC_category_utf8(pTHX_ int category)
     return is_utf8;
 }
 
-#endif
+#  ifdef USE_ALTERNATE_METHOD_FOR_UTF8NESS
+
+STATIC bool
+S_helper_is_cur_LC_category_utf8(pTHX_ const U8 * string,
+                                       U8 * distinct_variants,
+                                       SCX_enum * overall_script)
+{
+    /* This helper function for is_cur_LC_category_utf8() is used when LC_CTYPE
+     * is not definitive.
+     *
+     * 'string' points to the string to examine
+     * 'distinct_variants' is a string of the so-far encountered distinct
+     *                      non-ASCII sequences that are syntactically valid
+     *                      UTF-8.  This function will add any new ones it
+     *                      finds to this variable, if it isn't already full.
+     * '*overall_script' is the enum of the script that the previous calls to
+     *                   this have determined the text to be in.  This better
+     *                   be in an initial-like state, or else it indicates that
+     *                   'string' isn't really UTF-8.
+     *
+     * The function returns FALSE if 'string' looks like it isn't valid UTF-8
+     * in the expected script; TRUE if it could be.
+     */
+
+    const U8 * e = string + strlen((char *) string);
+    const U8 * first_variant, * s;
+    SCX_enum script_of_string;
+    Size_t cur_variants_len;
+
+    PERL_ARGS_ASSERT_HELPER_IS_CUR_LC_CATEGORY_UTF8;
+
+    /* Skip if didn't get a return value */
+    if (! string) {
+        return TRUE;
+    }
+
+    /* A completely invariant string doesn't tell us anything */
+    if (is_utf8_invariant_string_loc(string,
+                                     e - string,
+                                     &first_variant))
+    {
+        /* But if we haven't determined the overall script, do it here */
+        if (*overall_script == SCX_Unknown || *overall_script == SCX_Common) {
+            return isSCRIPT_RUN((U8 * ) string, e, TRUE, overall_script);
+        }
+
+        return TRUE;
+    }
+
+    /* But illegal UTF-8, or a mixed script, or the new string not matching
+     * what we have so far indicates not UTF-8.  (Some things may not get
+     * translated properly, so accept Latin */
+    if (   ! is_strict_utf8_string(first_variant, e - first_variant)
+        || ! isSCRIPT_RUN((U8 * ) string, e, TRUE, &script_of_string)
+        ||   script_of_string == SCX_Unknown
+        ||   (   script_of_string != SCX_Latin
+              && *overall_script != SCX_Common
+              && *overall_script != SCX_Unknown
+              && script_of_string != *overall_script))
+    {
+        return FALSE;
+    }
+
+    /* This should be a no-op unless overall_script is in an initial state */
+    *overall_script = script_of_string;
+
+    /* Skip if we've already found enough variants to fill our variable */
+    cur_variants_len = strlen((char *) distinct_variants);
+    if (cur_variants_len >= VARIANTS_SIZE) {
+        return TRUE;
+    }
+
+    /* Otherwise look through the string for new variants to add */
+    s = first_variant;
+    while (s < e) {
+        Size_t char_len = UTF8SKIP(s);
+
+        if (char_len == 1) {
+            s++;
+            continue;
+        }
+
+        /* If this sequence hasn't been seen before, add it to the list of
+         * unique ones. */
+
+        if (! ninstr(distinct_variants, distinct_variants + cur_variants_len,
+                     s, s + char_len))
+        {
+            Copy(s, distinct_variants + cur_variants_len, char_len, char);
+            distinct_variants[cur_variants_len + char_len] = '\0';
+        }
+
+        s+= char_len;
+    }
+
+    return TRUE;
+}
+
+#  endif
+#endif  /* USE_LOCALE */
 
 bool
 Perl__is_in_locale_category(pTHX_ const bool compiling, const int category)
