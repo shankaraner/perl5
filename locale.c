@@ -3307,8 +3307,8 @@ Perl__is_cur_LC_category_utf8(pTHX_ int category)
             /* Standard UTF-8 needs at least 4 bytes to represent the maximum
              * Unicode code point. */
 
-            DEBUG_L(PerlIO_printf(Perl_debug_log, "\tMB_CUR_MAX=%d\n",
-                                       (int) MB_CUR_MAX));
+            DEBUG_L(PerlIO_printf(Perl_debug_log, "%s: %d: MB_CUR_MAX=%d\n",
+                                       __FILE__, __LINE__, (int) MB_CUR_MAX));
             if ((unsigned) MB_CUR_MAX < STRLENs(MAX_UNICODE_UTF8)) {
                 is_utf8 = FALSE;
                 restore_switched_locale(LC_CTYPE, original_ctype_locale);
@@ -3893,10 +3893,12 @@ Perl__is_cur_LC_category_utf8(pTHX_ int category)
     /* Cache this result so we don't have to go through all this next time. */
     utf8ness_cache_size = sizeof(PL_locale_utf8ness)
                        - (utf8ness_cache - PL_locale_utf8ness);
+    DEBUG_L(PerlIO_printf(Perl_debug_log, "%s: %d: Cache size=%d\n", __FILE__, __LINE__, (int) utf8ness_cache_size));
 
     /* But we can't save it if it is too large for the total space available */
     if (LIKELY(input_name_len_with_overhead < utf8ness_cache_size)) {
         Size_t utf8ness_cache_len = strlen(utf8ness_cache);
+        DEBUG_L(PerlIO_printf(Perl_debug_log, "%s: %d: Cache strlen=%d\n", __FILE__, __LINE__, (int) utf8ness_cache_len));
 
         /* Here it can fit, but we may need to clear out the oldest cached
          * result(s) to do so.  Check */
@@ -3911,22 +3913,28 @@ Perl__is_cur_LC_category_utf8(pTHX_ int category)
                                                 utf8ness_cache_size
                                               - input_name_len_with_overhead);
 
+            DEBUG_L(PerlIO_printf(Perl_debug_log, "%s: %d: cutoff=%s\n\n", __FILE__, __LINE__, cutoff));
             assert(cutoff);
             assert(cutoff >= utf8ness_cache);
+            DEBUG_L(PerlIO_printf(Perl_debug_log, "%s: %d: before cut, cache=%s\n\n", __FILE__, __LINE__, utf8ness_cache));
 
             /* This and all subsequent entries must be removed */
             *cutoff = '\0';
             utf8ness_cache_len = strlen(utf8ness_cache);
+            DEBUG_L(PerlIO_printf(Perl_debug_log, "%s: %d: after cut, cache=%s, len=%d\n\n", __FILE__, __LINE__, utf8ness_cache, (int) utf8ness_cache_len));
         }
 
         /* Make space for the new entry */
+        DEBUG_L(PerlIO_printf(Perl_debug_log, "%s: %d: before move, cache=%s, len_with_overhead=%d\n\n", __FILE__, __LINE__, utf8ness_cache, (int) input_name_len_with_overhead));
         Move(utf8ness_cache,
              utf8ness_cache + input_name_len_with_overhead,
              utf8ness_cache_len + 1 /* Incl. trailing NUL */, char);
+        DEBUG_L(PerlIO_printf(Perl_debug_log, "%s: %d: after move, cache=%s\n\n", __FILE__, __LINE__, utf8ness_cache));
 
         /* And insert it */
         Copy(delimited, utf8ness_cache, input_name_len_with_overhead - 1, char);
         utf8ness_cache[input_name_len_with_overhead - 1] = is_utf8 + '0';
+        DEBUG_L(PerlIO_printf(Perl_debug_log, "%s: %d: after copy, cache=%s, len=%d\n\n", __FILE__, __LINE__, utf8ness_cache, (int) strlen(PL_locale_utf8ness)));
 
         if ((PL_locale_utf8ness[strlen(PL_locale_utf8ness)-1]
                                                 & (PERL_UINTMAX_T) ~1) != '0')
