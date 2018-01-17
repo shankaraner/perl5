@@ -5549,14 +5549,20 @@ typedef struct am_table_short AMTS;
 #    define LOCALE_INIT
 #    define LOCALE_LOCK
 #    define LOCALE_UNLOCK
+#    define LC_NUMERIC_LOCK
+#    define LC_NUMERIC_UNLOCK
 #    define LOCALE_TERM  STMT_START { _LOCALE_TERM_POSIX_2008; } STMT_END
-#  else /* Below is do use threads */
-#    define LOCALE_INIT         MUTEX_INIT(&PL_locale_mutex)
+#  else
+#    define LOCALE_INIT         STMT_START {                                \
+                                    MUTEX_INIT(&PL_locale_mutex);           \
+                                    MUTEX_INIT(&PL_lc_numeric_mutex);       \
+                                } STMT_END
 #    define LOCALE_LOCK         MUTEX_LOCK(&PL_locale_mutex)
 #    define LOCALE_UNLOCK       MUTEX_UNLOCK(&PL_locale_mutex)
 #    define LOCALE_TERM                                                     \
                     STMT_START {                                            \
                         MUTEX_DESTROY(&PL_locale_mutex);                    \
+                        MUTEX_DESTROY(&PL_lc_numeric_mutex);                \
                         _LOCALE_TERM_POSIX_2008;                            \
                     } STMT_END
 #    ifdef HAS_POSIX_2008_LOCALE
