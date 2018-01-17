@@ -48,7 +48,7 @@ package main;
 
 $| = 1;
 BEGIN { require './test.pl'; require './charset_tools.pl' }
-plan tests => 5338;
+plan tests => 5339;
 
 use Scalar::Util qw(tainted);
 
@@ -3046,4 +3046,26 @@ package RT132385 {
 
     # ditto with a mutator
     ::is($o .= $r1,     "obj-ref1",             "RT #132385 o.=r1");
+}
+
+{
+    no strict;
+    $msg = '---- script finished (should have already garbage-collected) ---';
+    fresh_perl_is(
+	<<'EOF',
+package RT18581;
+use overload
+    '++' => sub { $_[0] },
+    '='  => sub { $_[0] };
+sub DESTROY { print "Destroying $_[0]\n"; }
+{
+    my $a = bless {}, RT18581;
+    my $b = $a++;
+}
+print "---- script finished (should have already garbage-collected) ---\n";
+EOF
+    $msg,
+    {},
+    'RT 18581: timely destruction',
+    );
 }
