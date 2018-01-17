@@ -1438,6 +1438,14 @@ S_my_nl_langinfo(const int item, bool toggle)
 {
     dTHX;
 
+    /* We only need to toggle into the underlying LC_NUMERIC locale for these
+     * two items, and only if not already there */
+    if (toggle && ((   item != PERL_RADIXCHAR && item != PERL_THOUSEP)
+                    || PL_numeric_underlying))
+    {
+        toggle = FALSE;
+    }
+
 #if defined(HAS_NL_LANGINFO) /* nl_langinfo() is available.  */
 #if   ! defined(HAS_POSIX_2008_LOCALE)
 
@@ -1449,14 +1457,7 @@ S_my_nl_langinfo(const int item, bool toggle)
     LOCALE_LOCK;
 
     if (toggle) {
-        if (  ! PL_numeric_underlying
-            && (item == PERL_RADIXCHAR || item == PERL_THOUSEP))
-        {
             do_setlocale_c(LC_NUMERIC, PL_numeric_name);
-        }
-        else {
-            toggle = FALSE;
-        }
     }
 
     save_to_buffer(nl_langinfo(item), &PL_langinfo_buf, &PL_langinfo_bufsize, 0);
@@ -1469,6 +1470,7 @@ S_my_nl_langinfo(const int item, bool toggle)
 
 #  else /* Use nl_langinfo_l(), avoiding both a mutex and changing the locale */
 
+    {
     bool do_free = FALSE;
     locale_t cur = uselocale((locale_t) 0);
 
@@ -1486,6 +1488,7 @@ S_my_nl_langinfo(const int item, bool toggle)
                    &PL_langinfo_buf, &PL_langinfo_bufsize, 0);
     if (do_free) {
         freelocale(cur);
+    }
     }
 
 #  endif
@@ -1586,12 +1589,7 @@ S_my_nl_langinfo(const int item, bool toggle)
                 LOCALE_LOCK;
 
                 if (toggle) {
-                    if (! PL_numeric_underlying) {
                         do_setlocale_c(LC_NUMERIC, PL_numeric_name);
-                    }
-                    else {
-                        toggle = FALSE;
-                    }
                 }
 
                 lc = localeconv();
