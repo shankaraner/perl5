@@ -2572,7 +2572,7 @@ $x++;
 no warnings;
 use feature 'signatures';
 my $x;
-sub ($a, $b) : prototype($$) {
+my $f = sub : prototype($$) ($a, $b) {
     $x++;
 }
 ;
@@ -2582,7 +2582,7 @@ $x++;
 no warnings;
 use feature 'signatures';
 my $x;
-sub ($a, $b) : prototype($$) lvalue {
+my $f = sub : prototype($$) lvalue ($a, $b) {
     $x++;
 }
 ;
@@ -2592,7 +2592,7 @@ $x++;
 no warnings;
 use feature 'signatures';
 my $x;
-sub ($a, $b) : lvalue method {
+my $f = sub : lvalue method ($a, $b) {
     $x++;
 }
 ;
