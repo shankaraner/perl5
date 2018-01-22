@@ -1159,6 +1159,82 @@ Perl_utf8n_to_uvchr(pTHX_ const U8 *s,
     return utf8n_to_uvchr_error(s, curlen, retlen, flags, NULL);
 }
 
+/* The tables below come from http://bjoern.hoehrmann.de/utf-8/decoder/dfa/,
+ * which requires this copyright notice */
+
+/* Copyright (c) 2008-2009 Bjoern Hoehrmann <bjoern@hoehrmann.de>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+*/
+
+#if 0
+static U8 utf8d_C9[] = {
+  /* The first part of the table maps bytes to character classes that
+   * to reduce the size of the transition table and create bitmasks. */
+   0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /*-1F*/
+   0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /*-3F*/
+   0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /*-5F*/
+   0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /*-7F*/
+   1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,  9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9, /*-9F*/
+   7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,  7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7, /*-BF*/
+   8,8,2,2,2,2,2,2,2,2,2,2,2,2,2,2,  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2, /*-DF*/
+  10,3,3,3,3,3,3,3,3,3,3,3,3,4,3,3, 11,6,6,6,5,8,8,8,8,8,8,8,8,8,8,8, /*-FF*/
+
+  /* The second part is a transition table that maps a combination
+   * of a state of the automaton and a character class to a state. */
+   0,12,24,36,60,96,84,12,12,12,48,72, 12,12,12,12,12,12,12,12,12,12,12,12,
+  12, 0,12,12,12,12,12, 0,12, 0,12,12, 12,24,12,12,12,12,12,24,12,24,12,12,
+  12,12,12,12,12,12,12,24,12,12,12,12, 12,24,12,12,12,12,12,12,12,24,12,12,
+  12,12,12,12,12,12,12,36,12,36,12,12, 12,36,12,12,12,12,12,36,12,36,12,12,
+  12,36,12,12,12,12,12,12,12,12,12,12
+};
+
+#endif
+
+#ifndef EBCDIC
+
+/* This is a slightly customized for Perl version of the above that doesn't
+ * exclude surrogates. */
+static U8 dfa_tab_with_surrogates[] = {
+    /* The first part of the table maps bytes to character classes to reduce
+     * the size of the transition table and create bitmasks. */
+   0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+   0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+   0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+   0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+   1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,  9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,
+   7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,  7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
+   8,8,2,2,2,2,2,2,2,2,2,2,2,2,2,2,  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  10,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3, 11,6,6,6,5,8,8,8,8,8,8,8,8,8,8,8,
+
+  /* The second part is a transition table that maps a combination
+   * of a state of the automaton and a character class to a state. */
+   0,12,24,36,60,96,84,12,12,12,48,72, 12,12,12,12,12,12,12,12,12,12,12,12,
+  12, 0,12,12,12,12,12, 0,12, 0,12,12, 12,24,12,12,12,12,12,24,12,24,12,12,
+  12,12,12,12,12,12,12,24,12,12,12,12, 12,24,12,12,12,12,12,12,12,24,12,12,
+  12,12,12,12,12,12,12,36,12,36,12,12, 12,36,12,12,12,12,12,36,12,36,12,12,
+  12,36,12,12,12,12,12,12,12,12,12,12
+};
+
+#endif
+
 /*
 
 =for apidoc utf8n_to_uvchr_error
@@ -1282,11 +1358,10 @@ Perl_utf8n_to_uvchr_error(pTHX_ const U8 *s,
                                 U32 * errors)
 {
     const U8 * const s0 = s;
-    U8 * send = NULL;           /* (initialized to silence compilers' wrong
-                                   warning) */
+    const U8 * send = s0 + curlen;
     U32 possible_problems = 0;  /* A bit is set here for each potential problem
                                    found as we go along */
-    UV uv = *s;
+    UV uv;
     STRLEN expectlen   = 0;     /* How long should this sequence be?
                                    (initialized to silence compilers' wrong
                                    warning) */
@@ -1301,6 +1376,8 @@ Perl_utf8n_to_uvchr_error(pTHX_ const U8 *s,
     U8 temp_char_buf[UTF8_MAXBYTES + 1]; /* Used to avoid a Newx in this
                                             routine; see [perl #130921] */
     UV uv_so_far = 0;   /* (Initialized to silence compilers' wrong warning) */
+
+    UV state = 0;
 
     PERL_ARGS_ASSERT_UTF8N_TO_UVCHR_ERROR;
 
@@ -1356,9 +1433,55 @@ Perl_utf8n_to_uvchr_error(pTHX_ const U8 *s,
     }
 
     /* An invariant is trivially well-formed */
-    if (UTF8_IS_INVARIANT(uv)) {
-	return uv;
+    if (UTF8_IS_INVARIANT(*s0)) {
+	return *s0;
     }
+
+#ifndef EBCDIC
+
+    /* Measurements show that this dfa is somewhat faster than the regular code
+     * below, so use it first, dropping down for the non-normal cases. */
+    do { 
+        UV type = dfa_tab_with_surrogates[*s];
+
+        if (state != 0) {
+            uv = (*s & 0x3fu) | (uv << 6);
+            state = dfa_tab_with_surrogates[256 + state + type];
+        }
+        else {
+            uv = (0xff >> type) & (*s);
+            state = dfa_tab_with_surrogates[256 + type];
+        }
+
+        s++;
+
+#  define PERL_UTF8_DECODE_REJECT 12
+
+        if (   UNLIKELY(state == PERL_UTF8_DECODE_REJECT)
+            || UNLIKELY(s >= send && state != 0))
+        {
+            uv = *s0;
+            goto do_full;
+        }
+
+    } while (state != 0);
+
+    /* If this could be a code point that the flags don't allow (the first
+     * surrogate is the first such possible one), delve further, but we already
+     * have calculated 'uv' */
+    if (  (flags & (UTF8_DISALLOW_ILLEGAL_INTERCHANGE
+                   |UTF8_WARN_ILLEGAL_INTERCHANGE))
+        && uv >= UNICODE_SURROGATE_FIRST)
+    {
+        curlen = s - s0;
+        goto got_uv;
+    }
+
+    return uv;
+
+  do_full:
+
+#endif
 
     /* A continuation character can't start a valid sequence */
     if (UNLIKELY(UTF8_IS_CONTINUATION(uv))) {
@@ -1380,14 +1503,12 @@ Perl_utf8n_to_uvchr_error(pTHX_ const U8 *s,
 
     /* Setup the loop end point, making sure to not look past the end of the
      * input string, and flag it as too short if the size isn't big enough. */
-    send = (U8*) s0;
     if (UNLIKELY(curlen < expectlen)) {
         possible_problems |= UTF8_GOT_SHORT;
         avail_len = curlen;
-        send += curlen;
     }
     else {
-        send += expectlen;
+        send = (U8*) s0 + expectlen;
     }
 
     /* Now, loop through the remaining bytes in the character's sequence,
@@ -1480,6 +1601,8 @@ Perl_utf8n_to_uvchr_error(pTHX_ const U8 *s,
             (void) uvoffuni_to_utf8_flags(adjusted_s0, min_uv, 0);
         }
     }
+
+  got_uv:
 
     /* Here, we have found all the possible problems, except for when the input
      * is for a problematic code point not allowed by the input parameters. */
