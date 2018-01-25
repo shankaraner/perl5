@@ -1881,6 +1881,23 @@ REXEC_FBC_SCAN( /* Loops while (s < strend) */                 \
 	REXEC_FBC_CLASS_SCAN(COND);                            \
     }
 
+/* This differs from the others in that it calls a function which returns the
+ * next occurrence of the thing being looked for in 's'; and 'strend' if there
+ * is no such occurrence.  It assumes the length of the 'thing' is 1 */
+#define REXEC_FBC_FIND_NEXT_SCAN(f)                             \
+    while (s < strend) {                                        \
+        s = f;                                                  \
+        if (s >= strend) {                                      \
+            break;                                              \
+        }                                                       \
+                                                                \
+        if (tmp && (reginfo->intuit || regtry(reginfo, &s)))    \
+            goto got_it;                                        \
+        else                                                    \
+            tmp = doevery;                                      \
+        s++;                                                    \
+    }
+
 /* The three macros below are slightly different versions of the same logic.
  *
  * The first is for /a and /aa when the target string is UTF-8.  This can only
@@ -2622,19 +2639,11 @@ S_find_byclass(pTHX_ regexp * prog, const regnode *c, char *s,
         break;
 
     case ASCII:
-        s = find_next_ascii(s, strend, utf8_target);
-        if (s < strend && (reginfo->intuit || regtry(reginfo, &s))) {
-            goto got_it;
-        }
-
+        REXEC_FBC_FIND_NEXT_SCAN(find_next_ascii(s, strend, utf8_target));
         break;
 
     case NASCII:
-        s = find_next_non_ascii(s, strend, utf8_target);
-        if (s < strend && (reginfo->intuit || regtry(reginfo, &s))) {
-            goto got_it;
-        }
-
+        REXEC_FBC_FIND_NEXT_SCAN(find_next_non_ascii(s, strend, utf8_target));
         break;
 
     /* The argument to all the POSIX node types is the class number to pass to
