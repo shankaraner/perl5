@@ -32,7 +32,7 @@
 #define	ANYOF                 	18	/* 0x12 Match character in (or not in) this class, single char match only */
 #define	ANYOFD                	19	/* 0x13 Like ANYOF, but /d is in effect */
 #define	ANYOFL                	20	/* 0x14 Like ANYOF, but /l is in effect */
-#define	MASKED                	21	/* 0x15 Like ANYOF, but matches anything as determined by the mask */
+#define	MASKED                	21	/* 0x15 Like ANYOF, but matches an invariant byte as determined by the mask and arg */
 #define	POSIXD                	22	/* 0x16 Some [[:class:]] under /d; the FLAGS field gives which one */
 #define	POSIXL                	23	/* 0x17 Some [[:class:]] under /l; the FLAGS field gives which one */
 #define	POSIXU                	24	/* 0x18 Some [[:class:]] under /u; the FLAGS field gives which one */

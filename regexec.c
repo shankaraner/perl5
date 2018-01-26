@@ -687,7 +687,7 @@ S_find_span_end(char * s, const char * send, const char span_byte)
 
     assert(send >= s);
 
-#define WORTH_IT_BYTES 100  /* XXX Arbitrary for now */
+#define WORTH_IT_BYTES 24  /* XXX Arbitrary for now */
 
     if ((STRLEN) (send - s) >= WORTH_IT_BYTES) {
         PERL_UINTMAX_T span_word;
@@ -732,6 +732,74 @@ S_find_span_end(char * s, const char * send, const char span_byte)
     /* Process the straggler bytes beyond the final word boundary */
     while (s < send) {
         if (*s != span_byte) {
+            return s;
+        }
+        s++;
+    }
+
+    return s;
+}
+
+STATIC char *
+S_find_next_masked(char * s, const char * send, const U8 byte, const U8 mask)
+{
+    /* Returns the position of the first byte in the sequence between 's'
+     * and 'send-1' inclusive that when ANDed with 'mask' yields 'byte';
+     * returns 'send' if none found */
+
+    PERL_ARGS_ASSERT_FIND_NEXT_MASKED;
+
+    assert(send >= s);
+    assert((byte & mask) == byte);
+
+    if ((STRLEN) (send - s) >= WORTH_IT_BYTES) {
+        PERL_UINTMAX_T word_complemented, mask_word;
+
+        while (PTR2nat(s) & PERL_WORD_BOUNDARY_MASK) {
+            if (((* (U8 *) s) & mask) == byte) {
+                return s;
+            }
+            s++;
+        }
+
+        word_complemented = ~ (PERL_COUNT_MULTIPLIER * byte);
+        mask_word = PERL_COUNT_MULTIPLIER * mask;
+
+        do {
+            PERL_UINTMAX_T masked = (* (PERL_UINTMAX_T *) s) & mask_word;
+
+            /* If 'masked' contains 'byte' within it, anding with the
+             * complement will leave those 8 bits 0 */
+            masked &= word_complemented;
+
+            /* This causes the most significant bit to be set to 1 for any
+             * bytes in the word that aren't completely 0 */
+            masked |= masked << 1;
+            masked |= masked << 2;
+            masked |= masked << 4;
+
+            /* The msbits are the same as what marks a byte as variant, so we
+             * can use this mask.  If all msbits are 1, the word doesn't
+             * contain 'byte' */
+            if ((masked & PERL_VARIANTS_WORD_MASK) == PERL_VARIANTS_WORD_MASK) {
+                s += PERL_WORDSIZE;
+                continue;
+            }
+
+            /* Here, the msbit of bytes in the word that aren't 'byte' are 1,
+             * and any that are, are 0.  Complement and re-AND to swap that */
+            masked = ~ masked;
+            masked &= PERL_VARIANTS_WORD_MASK;
+
+            /* This reduces the problem to that solved by this function */
+            s += _variant_byte_number(masked);
+            return s;
+
+        } while (s + PERL_WORDSIZE <= send);
+    }
+
+    while (s < send) {
+        if (((* (U8 *) s) & mask) == byte) {
             return s;
         }
         s++;
@@ -1833,79 +1901,68 @@ STMT_START {                                              \
     }                                                     \
 } STMT_END
 
-#define REXEC_FBC_UTF8_SCAN(CODE)                     \
-STMT_START {                                          \
-    while (s < strend) {                              \
-	CODE                                          \
-	s += UTF8SKIP(s);                             \
-    }                                                 \
-} STMT_END
+#define REXEC_FBC_SCAN(UTF8, CODE)                          \
+    STMT_START {                                            \
+        while (s < strend) {                                \
+            CODE                                            \
+            s += ((UTF8) ? UTF8SKIP(s) : 1);                \
+        }                                                   \
+    } STMT_END
 
-#define REXEC_FBC_SCAN(CODE)                          \
-STMT_START {                                          \
-    while (s < strend) {                              \
-	CODE                                          \
-	s++;                                          \
-    }                                                 \
-} STMT_END
+#define REXEC_FBC_CLASS_SCAN(UTF8, COND)                    \
+    STMT_START {                                            \
+        while (s < strend) {                                \
+            REXEC_FBC_CLASS_SCAN_GUTS(UTF8, COND)           \
+        }                                                   \
+    } STMT_END
 
-/* In the next few macros, 'try_it' is a bool indicating whether to actually
- * try the match or not.  It is used for when the flags indicate that only the
- * first occurrence of 'x' in a string of them should be considered for
- * matching.  try_it is initialized to 1, and set to 1 on every failure of the
- * condition, thus it will be 1 whenever a 'x' happens to be first.  But when
- * the condition is met, and we don't exit the loop because we have ultimate
- * success, try_it is set to 'doevery', the latter being FALSE if we only want
- * the first in a string; otherwise TRUE, so try_it will be 0 when the previous
- * thing was 'x' and we only want the first 'x' */
+#define FBC_CHECK_AND_TRY                                   \
+        if (   (   doevery                                  \
+                || s != previous_occurrence_end)            \
+            && (reginfo->intuit || regtry(reginfo, &s)))    \
+        {                                                   \
+            goto got_it;                                    \
+        }
 
-#define REXEC_FBC_UTF8_CLASS_SCAN(COND)                        \
-REXEC_FBC_UTF8_SCAN( /* Loops while (s < strend) */            \
-    if (COND) {                                                \
-	if (try_it && (reginfo->intuit || regtry(reginfo, &s)))\
-	    goto got_it;                                       \
-	else                                                   \
-	    try_it = doevery;                                  \
-    }                                                          \
-    else                                                       \
-	try_it = 1;                                            \
-)
-
-#define REXEC_FBC_CLASS_SCAN(COND)                             \
-REXEC_FBC_SCAN( /* Loops while (s < strend) */                 \
-    if (COND) {                                                \
-	if (try_it && (reginfo->intuit || regtry(reginfo, &s)))\
-	    goto got_it;                                       \
-	else                                                   \
-	    try_it = doevery;                                  \
-    }                                                          \
-    else                                                       \
-	try_it = 1;                                            \
-)
-
-#define REXEC_FBC_CSCAN(CONDUTF8,COND)                         \
-    if (utf8_target) {                                         \
-	REXEC_FBC_UTF8_CLASS_SCAN(CONDUTF8);                   \
-    }                                                          \
-    else {                                                     \
-	REXEC_FBC_CLASS_SCAN(COND);                            \
+#define REXEC_FBC_CLASS_SCAN_GUTS(UTF8, COND)               \
+    if (COND) {                                             \
+        FBC_CHECK_AND_TRY                                   \
+        s += ((UTF8) ? UTF8SKIP(s) : 1);                    \
+        previous_occurrence_end = s;                        \
+    }                                                       \
+    else {                                                  \
+        s += ((UTF8) ? UTF8SKIP(s) : 1);                    \
     }
 
-/* This differs from the others in that it calls a function which returns the
- * next occurrence of the thing being looked for in 's'; and 'strend' if there
- * is no such occurrence.  It assumes the length of the 'thing' is 1 */
-#define REXEC_FBC_FIND_NEXT_SCAN(f)                             \
-    while (s < strend) {                                        \
-        s = f;                                                  \
-        if (s >= strend) {                                      \
-            break;                                              \
-        }                                                       \
-                                                                \
-        if (tmp && (reginfo->intuit || regtry(reginfo, &s)))    \
-            goto got_it;                                        \
-        else                                                    \
-            tmp = doevery;                                      \
-        s++;                                                    \
+/* This differs from the above macros in that it calls a function which returns
+ * the next occurrence of the thing being looked for in 's'; and 'strend' if
+ * there is no such occurrence.  It assumes the length of the 'thing' is 1.
+ *
+ * It also differs in how it deals with requiring only the initial 'x' in a
+ * string of them to be matched.  It has to do this since it can advance the
+ * input ptr by increments of more than 1.  It keeps track of the address of
+ * one beyond the the previous occurrence.  If this is the same as the current
+ * one, and we aren't allowing the multiple ones, we don't try a match.  This
+ * suffices because this macro should only be called when it is known that what
+ * gets matched has length 1 */
+#define REXEC_FBC_FIND_NEXT_SCAN(utf8_target, f)            \
+    while (s < strend) {                                    \
+        s = f;                                              \
+        if (s >= strend) {                                  \
+            break;                                          \
+        }                                                   \
+                                                            \
+        FBC_CHECK_AND_TRY                                   \
+        s += (utf8_target) ? UTF8SKIP(s) : 1;               \
+        previous_occurrence_end = s;                        \
+    }
+
+#define REXEC_FBC_CSCAN(CONDUTF8,COND)                      \
+    if (utf8_target) {                                      \
+	REXEC_FBC_CLASS_SCAN(1, CONDUTF8);                  \
+    }                                                       \
+    else {                                                  \
+	REXEC_FBC_CLASS_SCAN(0, COND);                      \
     }
 
 /* The three macros below are slightly different versions of the same logic.
@@ -1936,7 +1993,7 @@ REXEC_FBC_SCAN( /* Loops while (s < strend) */                 \
  * here.  And vice-versa if we are looking for a non-boundary.
  *
  * 'tmp' below in the next three macros in the REXEC_FBC_SCAN and
- * REXEC_FBC_UTF8_SCAN loops is a loop invariant, a bool giving the return of
+ * REXEC_FBC_SCAN loops is a loop invariant, a bool giving the return of
  * TEST_NON_UTF8(s-1).  To see this, note that that's what it is defined to be
  * at entry to the loop, and to get to the IF_FAIL branch, tmp must equal
  * TEST_NON_UTF8(s), and in the opposite branch, IF_SUCCESS, tmp is that
@@ -1947,7 +2004,7 @@ REXEC_FBC_SCAN( /* Loops while (s < strend) */                 \
 #define FBC_UTF8_A(TEST_NON_UTF8, IF_SUCCESS, IF_FAIL)                         \
     tmp = (s != reginfo->strbeg) ? UCHARAT(s - 1) : '\n';                      \
     tmp = TEST_NON_UTF8(tmp);                                                  \
-    REXEC_FBC_UTF8_SCAN( /* advances s while s < strend */                     \
+    REXEC_FBC_SCAN(1,  /* 1=>is_utf8; advances s while s < strend */           \
         if (tmp == ! TEST_NON_UTF8((U8) *s)) {                                 \
             tmp = !tmp;                                                        \
             IF_SUCCESS; /* Is a boundary if values for s-1 and s differ */     \
@@ -1971,7 +2028,7 @@ REXEC_FBC_SCAN( /* Loops while (s < strend) */                 \
     }                                                                          \
     tmp = TEST_UV(tmp);                                                        \
     LOAD_UTF8_CHARCLASS_ALNUM();                                               \
-    REXEC_FBC_UTF8_SCAN( /* advances s while s < strend */                     \
+    REXEC_FBC_SCAN(1,  /* 1=>is_utf8; advances s while s < strend */           \
         if (tmp == ! (TEST_UTF8((U8 *) s, (U8 *) reginfo->strend))) {          \
             tmp = !tmp;                                                        \
             IF_SUCCESS;                                                        \
@@ -1991,7 +2048,7 @@ REXEC_FBC_SCAN( /* Loops while (s < strend) */                 \
     else {  /* Not utf8 */                                                     \
 	tmp = (s != reginfo->strbeg) ? UCHARAT(s - 1) : '\n';                  \
 	tmp = TEST_NON_UTF8(tmp);                                              \
-	REXEC_FBC_SCAN( /* advances s while s < strend */                      \
+	REXEC_FBC_SCAN(0, /* 0=>not_utf8advances s while s < strend */         \
 	    if (tmp == ! TEST_NON_UTF8((U8) *s)) {                             \
 		IF_SUCCESS;                                                    \
 		tmp = !tmp;                                                    \
@@ -2136,7 +2193,10 @@ S_find_byclass(pTHX_ regexp * prog, const regnode *c, char *s,
     const char *strend, regmatch_info *reginfo)
 {
     dVAR;
+
+    /* TRUE if x+ need not match at just the 1st pos of run of x's */
     const I32 doevery = (prog->intflags & PREGf_SKIP) == 0;
+
     char *pat_string;   /* The pattern's exactish string */
     char *pat_end;	    /* ptr to end char of pat_string */
     re_fold_t folder;	/* Function for computing non-utf8 folds */
@@ -2146,8 +2206,14 @@ S_find_byclass(pTHX_ regexp * prog, const regnode *c, char *s,
     U8 c1;
     U8 c2;
     char *e;
-    bool try_it = 1;	/* Use in some macros to control whether to accept this
-                           occurrence of what's being matched, or not */
+
+    /* In some cases we accept only the first occurence of 'x' in a sequence of
+     * them.  This variable points to just beyond the end of the previous
+     * occurrence of 'x', hence we can tell if we are in a sequence.  (Having
+     * it point to beyond the 'x' allows us to work for UTF-8 without having to
+     * hop back.) */
+    char * previous_occurrence_end = 0;
+
     I32 tmp;            /* Scratch variable */
     const bool utf8_target = reginfo->is_utf8_target;
     UV utf8_fold_flags = 0;
@@ -2174,15 +2240,21 @@ S_find_byclass(pTHX_ regexp * prog, const regnode *c, char *s,
     case ANYOFD:
     case ANYOF:
         if (utf8_target) {
-            REXEC_FBC_UTF8_CLASS_SCAN(
+            REXEC_FBC_CLASS_SCAN(1,
                       reginclass(prog, c, (U8*)s, (U8*) strend, utf8_target));
         }
         else if (ANYOF_FLAGS(c)) {
-            REXEC_FBC_CLASS_SCAN(reginclass(prog,c, (U8*)s, (U8*)s+1, 0));
+            REXEC_FBC_CLASS_SCAN(0, reginclass(prog,c, (U8*)s, (U8*)s+1, 0));
         }
         else {
-            REXEC_FBC_CLASS_SCAN(ANYOF_BITMAP_TEST(c, *((U8*)s)));
+            REXEC_FBC_CLASS_SCAN(0, ANYOF_BITMAP_TEST(c, *((U8*)s)));
         }
+        break;
+
+    case MASKED:    /* ARG() is the base byte; FLAGS() the mask byte */
+        /* UTF-8ness doesn't matter, so use 0 */
+        REXEC_FBC_FIND_NEXT_SCAN(0,
+                                 find_next_masked(s, strend, ARG(c), FLAGS(c)));
         break;
 
     case EXACTFA_NO_TRIE:   /* This node only generated for non-utf8 patterns */
@@ -2651,11 +2723,13 @@ S_find_byclass(pTHX_ regexp * prog, const regnode *c, char *s,
         break;
 
     case ASCII:
-        REXEC_FBC_FIND_NEXT_SCAN(find_next_ascii(s, strend, utf8_target));
+        /* UTF-8ness doesn't matter, so use 0 */
+        REXEC_FBC_FIND_NEXT_SCAN(0, find_next_ascii(s, strend, utf8_target));
         break;
 
     case NASCII:
-        REXEC_FBC_FIND_NEXT_SCAN(find_next_non_ascii(s, strend, utf8_target));
+        REXEC_FBC_FIND_NEXT_SCAN(utf8_target,
+                                 find_next_non_ascii(s, strend, utf8_target));
         break;
 
     /* The argument to all the POSIX node types is the class number to pass to
@@ -2685,8 +2759,8 @@ S_find_byclass(pTHX_ regexp * prog, const regnode *c, char *s,
         if (utf8_target) {
             /* The complement of something that matches only ASCII matches all
              * non-ASCII, plus everything in ASCII that isn't in the class. */
-            REXEC_FBC_UTF8_CLASS_SCAN(   ! isASCII_utf8_safe(s, strend)
-                                      || ! _generic_isCC_A(*s, FLAGS(c)));
+            REXEC_FBC_CLASS_SCAN(1,   ! isASCII_utf8_safe(s, strend)
+                                   || ! _generic_isCC_A(*s, FLAGS(c)));
             break;
         }
 
@@ -2699,12 +2773,12 @@ S_find_byclass(pTHX_ regexp * prog, const regnode *c, char *s,
          * as otherwise we would have to examine all the continuation
          * characters */
         if (utf8_target) {
-            REXEC_FBC_UTF8_CLASS_SCAN(_generic_isCC_A(*s, FLAGS(c)));
+            REXEC_FBC_CLASS_SCAN(1, _generic_isCC_A(*s, FLAGS(c)));
             break;
         }
 
       posixa:
-        REXEC_FBC_CLASS_SCAN(
+        REXEC_FBC_CLASS_SCAN(0,
                         to_complement ^ cBOOL(_generic_isCC_A(*s, FLAGS(c))));
         break;
 
@@ -2714,7 +2788,8 @@ S_find_byclass(pTHX_ regexp * prog, const regnode *c, char *s,
 
     case POSIXU:
         if (! utf8_target) {
-            REXEC_FBC_CLASS_SCAN(to_complement ^ cBOOL(_generic_isCC(*s,
+            REXEC_FBC_CLASS_SCAN(0,
+                                 to_complement ^ cBOOL(_generic_isCC(*s,
                                                                     FLAGS(c))));
         }
         else {
@@ -2727,55 +2802,45 @@ S_find_byclass(pTHX_ regexp * prog, const regnode *c, char *s,
                     /* We avoid loading in the swash as long as possible, but
                      * should we have to, we jump to a separate loop.  This
                      * extra 'if' statement is what keeps this code from being
-                     * just a call to REXEC_FBC_UTF8_CLASS_SCAN() */
+                     * just a call to REXEC_FBC_CLASS_SCAN() */
                     if (UTF8_IS_ABOVE_LATIN1(*s)) {
                         goto found_above_latin1;
                     }
-                    if ((UTF8_IS_INVARIANT(*s)
+
+                    REXEC_FBC_CLASS_SCAN_GUTS(1, (UTF8_IS_INVARIANT(*s)
                          && to_complement ^ cBOOL(_generic_isCC((U8) *s,
                                                                 classnum)))
                         || (   UTF8_IS_NEXT_CHAR_DOWNGRADEABLE(s, strend)
                             && to_complement ^ cBOOL(
                                 _generic_isCC(EIGHT_BIT_UTF8_TO_NATIVE(*s,
                                                                       *(s + 1)),
-                                              classnum))))
-                    {
-                        if (try_it && (reginfo->intuit || regtry(reginfo, &s)))
-                            goto got_it;
-                        else {
-                            try_it = doevery;
-                        }
-                    }
-                    else {
-                        try_it = 1;
-                    }
-                    s += UTF8SKIP(s);
+                                              classnum))));
                 }
             }
             else switch (classnum) {    /* These classes are implemented as
                                            macros */
                 case _CC_ENUM_SPACE:
-                    REXEC_FBC_UTF8_CLASS_SCAN(
+                    REXEC_FBC_CLASS_SCAN(1,
                         to_complement ^ cBOOL(isSPACE_utf8_safe(s, strend)));
                     break;
 
                 case _CC_ENUM_BLANK:
-                    REXEC_FBC_UTF8_CLASS_SCAN(
+                    REXEC_FBC_CLASS_SCAN(1,
                         to_complement ^ cBOOL(isBLANK_utf8_safe(s, strend)));
                     break;
 
                 case _CC_ENUM_XDIGIT:
-                    REXEC_FBC_UTF8_CLASS_SCAN(
+                    REXEC_FBC_CLASS_SCAN(1,
                        to_complement ^ cBOOL(isXDIGIT_utf8_safe(s, strend)));
                     break;
 
                 case _CC_ENUM_VERTSPACE:
-                    REXEC_FBC_UTF8_CLASS_SCAN(
+                    REXEC_FBC_CLASS_SCAN(1,
                        to_complement ^ cBOOL(isVERTWS_utf8_safe(s, strend)));
                     break;
 
                 case _CC_ENUM_CNTRL:
-                    REXEC_FBC_UTF8_CLASS_SCAN(
+                    REXEC_FBC_CLASS_SCAN(1,
                         to_complement ^ cBOOL(isCNTRL_utf8_safe(s, strend)));
                     break;
 
@@ -2800,7 +2865,7 @@ S_find_byclass(pTHX_ regexp * prog, const regnode *c, char *s,
         /* This is a copy of the loop above for swash classes, though using the
          * FBC macro instead of being expanded out.  Since we've loaded the
          * swash, we don't have to check for that each time through the loop */
-        REXEC_FBC_UTF8_CLASS_SCAN(
+        REXEC_FBC_CLASS_SCAN(1,
                 to_complement ^ cBOOL(_generic_utf8_safe(
                                       classnum,
                                       s,
@@ -3527,7 +3592,7 @@ Perl_regexec_flags(pTHX_ REGEXP * const rx, char *stringarg, char *strend,
                 to_utf8_substr(prog);
             }
             ch = SvPVX_const(prog->anchored_utf8)[0];
-	    REXEC_FBC_SCAN(
+	    REXEC_FBC_SCAN(0,   /* 0=>not_utf8 */
 		if (*s == ch) {
 		    DEBUG_EXECUTE_r( did_match = 1 );
 		    if (regtry(reginfo, &s)) goto got_it;
@@ -3545,7 +3610,7 @@ Perl_regexec_flags(pTHX_ REGEXP * const rx, char *stringarg, char *strend,
                 }
             }
             ch = SvPVX_const(prog->anchored_substr)[0];
-	    REXEC_FBC_SCAN(
+	    REXEC_FBC_SCAN(0,   /* 0=>not_utf8 */
 		if (*s == ch) {
 		    DEBUG_EXECUTE_r( did_match = 1 );
 		    if (regtry(reginfo, &s)) goto got_it;
@@ -6661,6 +6726,13 @@ S_regmatch(pTHX_ regmatch_info *reginfo, char *startpos, regnode *prog)
 	    }
 	    break;
 
+        case MASKED:
+            if (NEXTCHR_IS_EOS || (UCHARAT(locinput) & FLAGS(scan)) != ARG(scan)) {
+                sayNO;
+            }
+            locinput++;
+            break;
+
         case ASCII:
             if (NEXTCHR_IS_EOS || ! isASCII(UCHARAT(locinput))) {
                 sayNO;
@@ -9340,12 +9412,20 @@ S_regrepeat(pTHX_ regexp *prog, char **startposp, const regnode *p,
 	}
 	break;
 
-    case ASCII:
+    case MASKED:
         if (utf8_target && loceol - scan > max) {
 
             /* We didn't adjust <loceol> at the beginning of this routine
              * because is UTF-8, but it is actually ok to do so, since here, to
              * match, 1 char == 1 byte. */
+            loceol = scan + max;
+        }
+
+        scan = (char *) find_span_end_mask((U8 *) scan, (U8 *) loceol, (U8) ARG(p), FLAGS(p));
+        break;
+
+    case ASCII:
+        if (utf8_target && loceol - scan > max) {
             loceol = scan + max;
         }
 

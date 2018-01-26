@@ -5516,6 +5516,27 @@ Perl_re_printf( aTHX_  "LHS=%" UVuf " RHS=%" UVuf "\n",
                                                           (regnode_charclass *) scan);
 		    break;
 
+                case MASKED:
+                  {
+                    SV* cp_list = get_MASKED_contents(scan);
+
+                    if (flags & SCF_DO_STCLASS_OR) {
+                        ssc_union(data->start_class,
+                                  cp_list,
+                                  FALSE /* don't invert */
+                                  );
+                    }
+                    else if (flags & SCF_DO_STCLASS_AND) {
+                        ssc_intersection(data->start_class,
+                                         cp_list,
+                                         FALSE /* don't invert */
+                                         );
+                    }
+
+                    SvREFCNT_dec_NN(cp_list);
+                    break;
+                  }
+
 		case NPOSIXL:
                     invert = 1;
                     /* FALLTHROUGH */
@@ -17999,25 +18020,20 @@ S_regclass(pTHX_ RExC_state_t *pRExC_state, I32 *flagp, U32 depth,
      * certain common classes that are easy to test.  Getting to this point in
      * the code means that the class didn't get optimized there.  Since this
      * code is only executed in Pass 2, it is too late to save space--it has
-     * been allocated in Pass 1, and currently isn't given back.  But turning
-     * things into an EXACTish node can allow the optimizer to join it to any
-     * adjacent such nodes.  And if the class is equivalent to things like /./,
-     * expensive run-time swashes can be avoided.  Now that we have more
-     * complete information, we can find things necessarily missed by the
-     * earlier code.  Another possible "optimization" that isn't done is that
-     * something like [Ee] could be changed into an EXACTFU.  khw tried this
-     * and found that the ANYOF is faster, including for code points not in the
-     * bitmap.  This still might make sense to do, provided it got joined with
-     * an adjacent node(s) to create a longer EXACTFU one.  This could be
-     * accomplished by creating a pseudo ANYOF_EXACTFU node type that the join
-     * routine would know is joinable.  If that didn't happen, the node type
-     * could then be made a straight ANYOF */
+     * been allocated in Pass 1, and currently isn't given back.  XXX Why not?
+     * But turning things into an EXACTish node can allow the optimizer to join
+     * it to any adjacent such nodes.  And if the class is equivalent to things
+     * like /./, expensive run-time swashes can be avoided.  Now that we have
+     * more complete information, we can find things necessarily missed by the
+     * earlier code. */
 
     if (optimizable && cp_list && ! invert) {
         UV start, end;
         U8 op = END;  /* The optimzation node-type */
         int posix_class = -1;   /* Illegal value */
         const char * cur_parse= RExC_parse;
+        U8 MASKED_mask;
+        U32 anode_arg = 0;
 
         invlist_iterinit(cp_list);
         if (! invlist_iternext(cp_list, &start, &end)) {
@@ -18156,6 +18172,61 @@ S_regclass(pTHX_ RExC_state_t *pRExC_state, I32 *flagp, U32 depth,
                 }
               found_posix: ;
             }
+
+            /* If it didn't match a POSIX class, it ...
+             * We go to 0xFF because of EBCDIC, though we'll never get there on
+             * ASCII platforms, as we stop at the first variant */
+            if (op == END && invlist_highest(cp_list) <= 0xFF) {
+                Size_t cp_count = 0;
+                bool first_time = TRUE;
+                unsigned int lowest_cp;
+                U8 bits_differing = 0;
+
+                invlist_iterinit(cp_list);
+                while (invlist_iternext(cp_list, &start, &end)) {
+                    unsigned int i = start;
+
+                    cp_count += end - start + 1;
+
+                    if (first_time) {
+                        first_time = FALSE;
+                        lowest_cp = start;
+                        if (! UVCHR_IS_INVARIANT(lowest_cp)) {
+                            goto done_masked;
+                        }
+
+                        i++;
+                    }
+
+                    /* For each code point in the range, find the bit positions
+                     * it differs from the lowest code point in the set.  Keep
+                     * track of all such positions by OR'ing */
+                    for (; i <= end; i++) {
+
+                        if (! UVCHR_IS_INVARIANT(i)) {
+                            goto done_masked;
+                        }
+
+                        bits_differing  |= i ^ lowest_cp;
+                    }
+                }
+                invlist_iterfinish(cp_list);
+
+                if (cp_count == 1U << PL_bitcount[bits_differing]) {
+                    assert(cp_count > 1);
+                    op = MASKED;
+                    MASKED_mask = ~ bits_differing;
+                    anode_arg = lowest_cp;
+                    *flagp |= HASWIDTH|SIMPLE;
+                    /*PerlIO_printf(Perl_debug_log, "%s: %d: bits_differing=0x%x, count=%d\n", __FILE__, __LINE__, bits_differing, PL_bitcount[bits_differing]);*/
+                    /*DEBUG_U(
+                            sv_dump(cp_list)
+                            )
+                            ;
+                            */
+                }
+              done_masked: ;
+            }
         }
 
         if (op != END) {
@@ -18163,7 +18234,7 @@ S_regclass(pTHX_ RExC_state_t *pRExC_state, I32 *flagp, U32 depth,
             RExC_emit = (regnode *)orig_emit;
 
             if (regarglen[op]) {
-                ret = reganode(pRExC_state, op, 0);
+                ret = reganode(pRExC_state, op, anode_arg);
             } else {
                 ret = reg_node(pRExC_state, op);
             }
@@ -18177,6 +18248,9 @@ S_regclass(pTHX_ RExC_state_t *pRExC_state, I32 *flagp, U32 depth,
             }
             else if (PL_regkind[op] == POSIXD || PL_regkind[op] == NPOSIXD) {
                 FLAGS(ret) = posix_class;
+            }
+            else if (PL_regkind[op] == MASKED) {
+                FLAGS(ret) = MASKED_mask;
             }
 
             SvREFCNT_dec_NN(cp_list);
@@ -19029,6 +19103,27 @@ S_regtail_study(pTHX_ RExC_state_t *pRExC_state, regnode *p,
     return exact;
 }
 #endif
+                    
+STATIC SV*
+S_get_MASKED_contents(pTHX_ const regnode * n) {
+    SV * cp_list = _new_invlist(-1);
+    const U8 lowest = ARG(n);
+    U8 i;
+    U8 count = 0;
+    U8 needed = 1U << PL_bitcount[ (U8) ~ FLAGS(n)];
+
+    PERL_ARGS_ASSERT_GET_MASKED_CONTENTS;
+
+    for (i = lowest; i <= 0xFF; i++) {
+        if ((i & FLAGS(n)) == ARG(n)) {
+            cp_list = add_cp_to_invlist(cp_list, i);
+            count++;
+            if (count >= needed) break;
+        }
+    }
+
+    return cp_list;
+}
 
 /*
  - regdump - dump a regexp onto Perl_debug_log in vaguely comprehensible form
@@ -19555,6 +19650,15 @@ Perl_regprop(pTHX_ const regexp *prog, SV *sv, const regnode *o, const regmatch_
 	Perl_sv_catpvf(aTHX_ sv, "%s]", PL_colors[1]);
 
         SvREFCNT_dec(unresolved);
+    }
+    else if (k == MASKED) {
+        SV * cp_list = get_MASKED_contents(o);
+
+	Perl_sv_catpvf(aTHX_ sv, "[%s", PL_colors[0]);
+        put_charclass_bitmap_innards(sv, NULL, cp_list, NULL, NULL, TRUE);
+	Perl_sv_catpvf(aTHX_ sv, "%s]", PL_colors[1]);
+
+        SvREFCNT_dec(cp_list);
     }
     else if (k == POSIXD || k == NPOSIXD) {
         U8 index = FLAGS(o) * 2;
